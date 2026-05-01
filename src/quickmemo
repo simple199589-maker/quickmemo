@@ -86,9 +86,6 @@ window {
 .line-button:hover {
   background: #eeeeee;
 }
-.line-button.inline-code-hover {
-  background: #eef6ff;
-}
 .code-button {
   background: #f6f8fa;
   border: 1px solid #e1e4e8;
@@ -223,13 +220,13 @@ def parse_memos(path: Path):
     for index, raw in enumerate(source_lines):
         if raw.startswith('# '):
             if title and lines:
-                memos.append(Memo(category, title, '\n'.join(lines).strip(), start, index))
+                memos.append(Memo(category, title, '\n'.join(lines), start, index))
             category = raw[2:].strip() or '无标签'
             title = None
             lines = []
         elif raw.startswith('## '):
             if title and lines:
-                memos.append(Memo(category, title, '\n'.join(lines).strip(), start, index))
+                memos.append(Memo(category, title, '\n'.join(lines), start, index))
             title = raw[3:].strip() or '未命名'
             start = index
             lines = []
@@ -237,7 +234,7 @@ def parse_memos(path: Path):
             if title is not None:
                 lines.append(raw)
     if title and lines:
-        memos.append(Memo(category, title, '\n'.join(lines).strip(), start, len(source_lines)))
+        memos.append(Memo(category, title, '\n'.join(lines), start, len(source_lines)))
     return [m for m in memos if m.body]
 
 
@@ -459,18 +456,22 @@ class QuickMemo(Gtk.Application):
         label.add_css_class(css_class)
         label.set_hexpand(True)
         query = self.query.strip()
+        if markdown:
+            markup = self.line_markup(text)
+        else:
+            markup = GLib.markup_escape_text(text)
         if query:
-            pattern = re.compile(re.escape(query), re.IGNORECASE)
+            pattern = re.compile(re.escape(GLib.markup_escape_text(query)), re.IGNORECASE)
             parts = []
             last = 0
-            for match in pattern.finditer(text):
-                parts.append(GLib.markup_escape_text(text[last:match.start()]))
-                parts.append(f'<span background="#fff29b">{GLib.markup_escape_text(text[match.start():match.end()])}</span>')
+            for match in pattern.finditer(markup):
+                parts.append(markup[last:match.start()])
+                parts.append(f'<span background="#fff29b">{markup[match.start():match.end()]}</span>')
                 last = match.end()
-            parts.append(GLib.markup_escape_text(text[last:]))
+            parts.append(markup[last:])
             label.set_markup(''.join(parts))
         elif markdown:
-            label.set_markup(self.line_markup(text))
+            label.set_markup(markup)
         else:
             label.set_text(text)
         return label
@@ -499,6 +500,13 @@ class QuickMemo(Gtk.Application):
             parts.extend(('line', line) for line in ['```', *code_lines])
         return parts
 
+    def line_text(self, text):
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+)__', r'\1', text)
+        text = re.sub(r'^\s*[-*+]\s+(.+)$', r'• \1', text)
+        return text
+
     def create_line_button(self, text):
         button = Gtk.Button()
         button.add_css_class('line-button')
@@ -509,44 +517,8 @@ class QuickMemo(Gtk.Application):
         label.set_wrap_mode(Pango.WrapMode.CHAR)
         label.set_selectable(False)
         button.set_child(label)
-        button.connect('clicked', self.copy_text, text)
-        inline_ranges = [(match.start(), match.end(), match.group(1)) for match in re.finditer(r'`([^`]+)`', text)]
-        if inline_ranges:
-            click = Gtk.GestureClick()
-            click.connect('pressed', self.copy_inline_code, label, inline_ranges)
-            button.add_controller(click)
-
-            motion = Gtk.EventControllerMotion()
-            motion.connect('motion', self.update_inline_code_hover, button, label, inline_ranges)
-            motion.connect('leave', self.clear_inline_code_hover, button)
-            button.add_controller(motion)
+        button.connect('clicked', self.copy_text, self.line_text(text).strip())
         return button
-
-    def inline_code_at(self, label, inline_ranges, x, y):
-        layout = label.get_layout()
-        offset_x, offset_y = label.get_layout_offsets()
-        index, _trailing = layout.xy_to_index(int((x - offset_x) * Pango.SCALE), int((y - offset_y) * Pango.SCALE))
-        for start, end, text in inline_ranges:
-            if start <= index < end:
-                return text
-        return None
-
-    def copy_inline_code(self, gesture, _n_press, x, y, label, inline_ranges):
-        text = self.inline_code_at(label, inline_ranges, x, y)
-        if text is None:
-            gesture.set_state(Gtk.EventSequenceState.DENIED)
-            return
-        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-        self.copy_to_clipboard(text)
-
-    def update_inline_code_hover(self, _motion, x, y, button, label, inline_ranges):
-        if self.inline_code_at(label, inline_ranges, x, y) is None:
-            button.remove_css_class('inline-code-hover')
-        else:
-            button.add_css_class('inline-code-hover')
-
-    def clear_inline_code_hover(self, _motion, button):
-        button.remove_css_class('inline-code-hover')
 
     def render_cards(self):
         while child := self.card_box.get_first_child():
@@ -625,8 +597,16 @@ class QuickMemo(Gtk.Application):
         memos = self.visible_memos()
         if not memos:
             return
-        for line in memos[0].body.splitlines():
-            if line:
+        query = self.query.lower().strip()
+        for memo in memos:
+            for kind, text in self.body_parts(memo.body):
+                if kind != 'line':
+                    continue
+                line = self.line_text(text).strip()
+                if not line:
+                    continue
+                if query and query not in line.lower() and query not in text.lower():
+                    continue
                 self.copy_to_clipboard(line)
                 return
 
