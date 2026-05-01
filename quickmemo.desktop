@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Quick Memo
+Name[zh_CN]=备忘快贴
+Comment=Search and copy memo snippets
+Comment[zh_CN]=搜索并复制备忘片段
+Exec=quickmemo
+Icon=quickmemo
+Terminal=false
+Categories=Utility;
+StartupNotify=true

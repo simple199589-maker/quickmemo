@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	override_dh_auto_test:
+	override_dh_auto_install:
+	install -Dm755 src/quickmemo debian/quickmemo/usr/bin/quickmemo
+	install -Dm644 quickmemo.desktop debian/quickmemo/usr/share/applications/quickmemo.desktop
+	install -Dm644 quickmemo.svg debian/quickmemo/usr/share/icons/hicolor/scalable/apps/quickmemo.svg
+	install -Dm644 data/memos.md debian/quickmemo/usr/share/doc/quickmemo/examples/memos.md

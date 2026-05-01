@@ -1,0 +1,577 @@
+#!/usr/bin/python3
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Gdk', '4.0')
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+
+MEMO_FILE = Path.home() / '.local/share/quickmemo/memos.md'
+CONFIG_FILE = Path.home() / '.config/quickmemo/config.json'
+AUTOSTART_FILE = Path.home() / '.config/autostart/quickmemo.desktop'
+CSS = b'''
+window {
+  background: #f3f3f3;
+}
+.root {
+  background: #f3f3f3;
+}
+.sidebar {
+  background: #f3f3f3;
+  padding: 14px 10px;
+  border-right: 1px solid #e2e2e2;
+}
+.sidebar-row {
+  color: #666;
+  font-size: 15px;
+  padding: 9px 12px;
+  border-radius: 8px;
+}
+.sidebar-row:selected {
+  color: #229b30;
+  background: transparent;
+  font-weight: 700;
+}
+.topbar {
+  padding: 14px 14px 8px 14px;
+}
+.switch-row {
+  padding: 0 14px 8px 14px;
+}
+.setting-switch {
+  font-size: 12px;
+}
+.setting-switch switch {
+  min-width: 28px;
+  min-height: 16px;
+}
+.setting-switch switch slider {
+  min-width: 12px;
+  min-height: 12px;
+}
+.title-pill {
+  background: #dddddd;
+  border-radius: 20px;
+  padding: 7px 14px;
+  font-size: 18px;
+}
+.search {
+  background: white;
+  border-radius: 8px;
+  font-size: 18px;
+}
+.card {
+  background: white;
+  border-radius: 6px;
+  margin: 5px 14px;
+  padding: 4px 0;
+}
+.card-selected {
+  outline: 2px solid #2f9638;
+}
+.line-button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 4px 10px;
+  border-radius: 5px;
+}
+.line-button:hover {
+  background: #eeeeee;
+}
+.title-button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 3px 10px 1px 10px;
+  border-radius: 5px;
+}
+.title-button:hover {
+  background: #eeeeee;
+}
+.title-text {
+  color: #777;
+  font-size: 13px;
+  font-weight: 600;
+}
+.line-text {
+  color: #111;
+  font-size: 15px;
+}
+.copy-all {
+  margin: 6px 2px 6px 6px;
+  padding: 0;
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 13px;
+  font-size: 13px;
+}
+.delete-card {
+  margin: 6px 6px 6px 2px;
+  padding: 0;
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 13px;
+  font-size: 13px;
+}
+.toast {
+  background: rgba(50, 50, 50, 0.92);
+  color: white;
+  padding: 8px 14px;
+  border-radius: 18px;
+}
+'''
+
+
+@dataclass
+class Memo:
+    category: str
+    title: str
+    body: str
+    start: int
+    end: int
+
+
+def load_config():
+    if not CONFIG_FILE.exists():
+        return {'autostart': False, 'start_hidden': False}
+    try:
+        config = json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
+    except Exception:
+        return {'autostart': False, 'start_hidden': False}
+    return {
+        'autostart': bool(config.get('autostart', False)),
+        'start_hidden': bool(config.get('start_hidden', False)),
+    }
+
+
+def save_config(config):
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+def sync_autostart(config):
+    AUTOSTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if config.get('autostart'):
+        hidden_arg = ' --hidden' if config.get('start_hidden') else ''
+        AUTOSTART_FILE.write_text(f'''[Desktop Entry]
+Type=Application
+Name=Quick Memo
+Name[zh_CN]=备忘快贴
+Exec=/usr/bin/quickmemo{hidden_arg}
+Icon=quickmemo
+Terminal=false
+X-GNOME-Autostart-enabled=true
+''', encoding='utf-8')
+    elif AUTOSTART_FILE.exists():
+        AUTOSTART_FILE.unlink()
+
+
+def parse_memos(path: Path):
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('# 备忘\n\n## 示例\n点击单行复制这一行\n', encoding='utf-8')
+    category = '无标签'
+    title = None
+    start = 0
+    lines = []
+    source_lines = path.read_text(encoding='utf-8').splitlines()
+    memos = []
+    for index, raw in enumerate(source_lines):
+        if raw.startswith('# '):
+            if title and lines:
+                memos.append(Memo(category, title, '\n'.join(lines).strip(), start, index))
+            category = raw[2:].strip() or '无标签'
+            title = None
+            lines = []
+        elif raw.startswith('## '):
+            if title and lines:
+                memos.append(Memo(category, title, '\n'.join(lines).strip(), start, index))
+            title = raw[3:].strip() or '未命名'
+            start = index
+            lines = []
+        else:
+            if title is not None:
+                lines.append(raw)
+    if title and lines:
+        memos.append(Memo(category, title, '\n'.join(lines).strip(), start, len(source_lines)))
+    return [m for m in memos if m.body]
+
+
+class QuickMemo(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='io.github.quickmemo', flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        self.memos = []
+        self.category = '全部'
+        self.query = ''
+        self.selected_card = None
+        self.window = None
+        self.listbox = None
+        self.card_box = None
+        self.search = None
+        self.toast = None
+        self.started = False
+        self.config = load_config()
+        self.autostart_switch = None
+        self.start_hidden_switch = None
+
+    def do_activate(self):
+        if '--hidden' in sys.argv and not self.started:
+            self.build_window(start_hidden=True)
+            return
+        if self.started:
+            self.toggle_window()
+            return
+        self.build_window(start_hidden=False)
+
+    def show_window(self):
+        if not self.started:
+            self.build_window(start_hidden=False)
+            return
+        self.window.present()
+        self.search.grab_focus()
+
+    def build_window(self, start_hidden=False):
+        if self.started:
+            return
+        self.started = True
+        self.memos = parse_memos(MEMO_FILE)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.window = Gtk.ApplicationWindow(application=self)
+        self.window.set_title('备忘快贴')
+        self.window.set_default_size(1100, 720)
+        self.window.add_css_class('root')
+
+        overlay = Gtk.Overlay()
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        overlay.set_child(root)
+        self.window.set_child(overlay)
+
+        self.toast = Gtk.Label(label='')
+        self.toast.add_css_class('toast')
+        self.toast.set_halign(Gtk.Align.CENTER)
+        self.toast.set_valign(Gtk.Align.END)
+        self.toast.set_margin_bottom(24)
+        self.toast.set_visible(False)
+        overlay.add_overlay(self.toast)
+
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.add_css_class('sidebar')
+        self.listbox.set_size_request(210, -1)
+        self.listbox.connect('row-selected', self.on_category_selected)
+        root.append(self.listbox)
+
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        main.set_hexpand(True)
+        main.set_vexpand(True)
+        root.append(main)
+
+        topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        topbar.add_css_class('topbar')
+        main.append(topbar)
+
+        title = Gtk.Label(label='备忘 ×')
+        title.add_css_class('title-pill')
+        topbar.append(title)
+
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text('搜索，回车复制选中行')
+        self.search.set_hexpand(True)
+        self.search.add_css_class('search')
+        self.search.connect('search-changed', self.on_search_changed)
+        self.search.connect('activate', self.copy_first_line)
+        topbar.append(self.search)
+
+        edit_button = Gtk.Button(label='编辑')
+        edit_button.connect('clicked', self.open_memo_file)
+        topbar.append(edit_button)
+
+        switch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        switch_row.add_css_class('switch-row')
+        main.append(switch_row)
+
+        self.autostart_switch = Gtk.Switch()
+        self.autostart_switch.set_active(self.config['autostart'])
+        self.autostart_switch.connect('notify::active', self.on_autostart_changed)
+        switch_row.append(self.setting_switch_box('开机启动', self.autostart_switch))
+
+        self.start_hidden_switch = Gtk.Switch()
+        self.start_hidden_switch.set_active(self.config['start_hidden'])
+        self.start_hidden_switch.connect('notify::active', self.on_start_hidden_changed)
+        switch_row.append(self.setting_switch_box('启动后隐藏', self.start_hidden_switch))
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+        main.append(scrolled)
+
+        self.card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.card_box.set_hexpand(True)
+        scrolled.set_child(self.card_box)
+
+        self.render_categories()
+        self.render_cards()
+        self.setup_shortcuts()
+        if start_hidden:
+            self.window.set_visible(False)
+        else:
+            self.show_window()
+
+    def setting_switch_box(self, label_text, switch):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.add_css_class('setting-switch')
+        label = Gtk.Label(label=label_text)
+        box.append(label)
+        box.append(switch)
+        return box
+
+    def on_autostart_changed(self, switch, _param):
+        enabled = switch.get_active()
+        self.config['autostart'] = enabled
+        save_config(self.config)
+        sync_autostart(self.config)
+        self.show_toast('已开启开机启动' if enabled else '已关闭开机启动')
+
+    def on_start_hidden_changed(self, switch, _param):
+        enabled = switch.get_active()
+        self.config['start_hidden'] = enabled
+        save_config(self.config)
+        sync_autostart(self.config)
+        self.show_toast('开机启动后将隐藏' if enabled else '开机启动后将显示')
+
+    def setup_shortcuts(self):
+        toggle = Gio.SimpleAction.new('toggle-window', None)
+        toggle.connect('activate', self.on_toggle_shortcut)
+        self.add_action(toggle)
+        self.set_accels_for_action('app.toggle-window', ['<Alt>space'])
+
+        escape = Gtk.EventControllerKey()
+        escape.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        escape.connect('key-pressed', self.on_key_pressed)
+        self.window.add_controller(escape)
+
+    def on_toggle_shortcut(self, _action, _parameter):
+        self.toggle_window()
+
+    def on_key_pressed(self, _controller, keyval, _keycode, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.window.set_visible(False)
+            return True
+        return False
+
+    def force_window_to_front(self):
+        subprocess.Popen(['wmctrl', '-a', '备忘快贴'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return GLib.SOURCE_REMOVE
+
+    def toggle_window(self):
+        if self.window.is_visible() and self.window.is_active():
+            self.window.set_visible(False)
+            return
+        self.show_window()
+        GLib.timeout_add(80, self.force_window_to_front)
+
+    def render_categories(self):
+        while row := self.listbox.get_row_at_index(0):
+            self.listbox.remove(row)
+        categories = ['全部']
+        for memo in self.memos:
+            if memo.category not in categories:
+                categories.append(memo.category)
+        for index, category in enumerate(categories):
+            row = Gtk.ListBoxRow()
+            label = Gtk.Label(label=category, xalign=0)
+            label.add_css_class('sidebar-row')
+            row.set_child(label)
+            self.listbox.append(row)
+            if index == 0:
+                self.listbox.select_row(row)
+
+    def visible_memos(self):
+        query = self.query.lower().strip()
+        result = []
+        for memo in self.memos:
+            if self.category != '全部' and memo.category != self.category:
+                continue
+            haystack = f'{memo.category}\n{memo.title}\n{memo.body}'.lower()
+            if query and query not in haystack:
+                continue
+            result.append(memo)
+        return result
+
+    def highlighted_label(self, text, css_class):
+        label = Gtk.Label(xalign=0)
+        label.add_css_class(css_class)
+        label.set_hexpand(True)
+        query = self.query.strip()
+        if query:
+            pattern = re.compile(re.escape(query), re.IGNORECASE)
+            parts = []
+            last = 0
+            for match in pattern.finditer(text):
+                parts.append(GLib.markup_escape_text(text[last:match.start()]))
+                parts.append(f'<span background="#fff29b">{GLib.markup_escape_text(text[match.start():match.end()])}</span>')
+                last = match.end()
+            parts.append(GLib.markup_escape_text(text[last:]))
+            label.set_markup(''.join(parts))
+        else:
+            label.set_text(text)
+        return label
+
+    def render_cards(self):
+        while child := self.card_box.get_first_child():
+            self.card_box.remove(child)
+        self.selected_card = None
+        for memo in self.visible_memos():
+            card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            card.add_css_class('card')
+            card.set_hexpand(True)
+
+            lines = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            lines.set_hexpand(True)
+            card.append(lines)
+
+            title_button = Gtk.Button()
+            title_button.add_css_class('title-button')
+            title_button.set_hexpand(True)
+            title_button.set_halign(Gtk.Align.FILL)
+            title_label = self.highlighted_label(memo.title, 'title-text')
+            title_label.set_ellipsize(Pango.EllipsizeMode.END)
+            title_button.set_child(title_label)
+            title_button.connect('clicked', self.copy_text, memo.title)
+            lines.append(title_button)
+
+            for line in memo.body.splitlines():
+                if line == '':
+                    continue
+                button = Gtk.Button()
+                button.add_css_class('line-button')
+                button.set_hexpand(True)
+                button.set_halign(Gtk.Align.FILL)
+                label = self.highlighted_label(line, 'line-text')
+                label.set_wrap(True)
+                label.set_wrap_mode(Pango.WrapMode.CHAR)
+                label.set_selectable(False)
+                button.set_child(label)
+                button.connect('clicked', self.copy_text, line)
+                lines.append(button)
+
+            actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            actions.set_valign(Gtk.Align.START)
+            card.append(actions)
+
+            copy_all = Gtk.Button(label='⧉')
+            copy_all.set_tooltip_text('复制整条')
+            copy_all.add_css_class('copy-all')
+            copy_all.connect('clicked', self.copy_text, memo.body)
+            actions.append(copy_all)
+
+            delete_button = Gtk.Button(label='×')
+            delete_button.set_tooltip_text('删除整条')
+            delete_button.add_css_class('delete-card')
+            delete_button.connect('clicked', self.confirm_delete_memo, memo)
+            actions.append(delete_button)
+
+            if self.selected_card is None:
+                card.add_css_class('card-selected')
+                self.selected_card = card
+
+            self.card_box.append(card)
+
+    def on_category_selected(self, _listbox, row):
+        if row is None:
+            return
+        self.category = row.get_child().get_label()
+        self.render_cards()
+
+    def on_search_changed(self, entry):
+        self.query = entry.get_text()
+        self.render_cards()
+
+    def copy_first_line(self, _entry):
+        memos = self.visible_memos()
+        if not memos:
+            return
+        for line in memos[0].body.splitlines():
+            if line:
+                self.copy_to_clipboard(line)
+                return
+
+    def copy_text(self, _button, text):
+        self.copy_to_clipboard(text)
+
+    def confirm_delete_memo(self, _button, memo):
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(f'删除「{memo.title}」？')
+        dialog.set_detail('删除后会从备忘文件中移除这一整块内容。')
+        dialog.set_buttons(['取消', '删除'])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(0)
+        dialog.choose(self.window, None, self.on_delete_confirmed, memo)
+
+    def on_delete_confirmed(self, dialog, result, memo):
+        try:
+            if dialog.choose_finish(result) != 1:
+                return
+        except Exception:
+            return
+        self.delete_memo(memo)
+
+    def show_toast(self, text):
+        self.toast.set_label(text)
+        self.toast.set_visible(True)
+        GLib.timeout_add(900, self.hide_toast)
+
+    def delete_memo(self, memo):
+        lines = MEMO_FILE.read_text(encoding='utf-8').splitlines()
+        del lines[memo.start:memo.end]
+        while memo.start < len(lines) and lines[memo.start] == '':
+            del lines[memo.start]
+        MEMO_FILE.write_text('\n'.join(lines).rstrip() + '\n', encoding='utf-8')
+        self.memos = parse_memos(MEMO_FILE)
+        self.render_categories()
+        self.render_cards()
+        self.show_toast('已删除')
+
+    def copy_to_clipboard(self, text):
+        display = Gdk.Display.get_default()
+        display.get_clipboard().set(text)
+        if os.environ.get('XDG_SESSION_TYPE') == 'wayland':
+            try:
+                subprocess.Popen(['wl-copy'], stdin=subprocess.PIPE).communicate(text.encode('utf-8'), timeout=1)
+            except Exception:
+                pass
+        self.show_toast('已复制')
+
+    def hide_toast(self):
+        self.toast.set_visible(False)
+        return GLib.SOURCE_REMOVE
+
+    def open_memo_file(self, _button):
+        editor = os.environ.get('EDITOR')
+        if editor:
+            subprocess.Popen([editor, str(MEMO_FILE)])
+            return
+        for command in ['gnome-text-editor', 'gedit', 'xdg-open']:
+            try:
+                subprocess.Popen([command, str(MEMO_FILE)])
+                return
+            except FileNotFoundError:
+                continue
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    app = QuickMemo()
+    sys.exit(app.run(sys.argv))

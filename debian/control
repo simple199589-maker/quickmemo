@@ -1,0 +1,17 @@
+Source: quickmemo
+Section: utils
+Priority: optional
+Maintainer: simple <simple@example.com>
+Build-Depends: debhelper-compat (= 13), desktop-file-utils
+Standards-Version: 4.7.0
+Homepage: https://github.com/simple/quickmemo
+Rules-Requires-Root: no
+
+Package: quickmemo
+Architecture: all
+Depends: ${misc:Depends}, python3, python3-gi, gir1.2-gtk-4.0, gir1.2-pango-1.0, wl-clipboard, wmctrl
+Recommends: gnome-text-editor | gedit
+Description: Markdown based memo snippet picker
+ Quick Memo is a small GTK 4 memo snippet picker. It stores snippets in a
+ Markdown file, supports category navigation, search highlighting, single-line
+ copy, full-card copy, delete confirmation, autostart, and hidden autostart.
