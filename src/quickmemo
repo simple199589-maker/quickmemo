@@ -86,6 +86,26 @@ window {
 .line-button:hover {
   background: #eeeeee;
 }
+.line-button.inline-code-hover {
+  background: #eef6ff;
+}
+.code-button {
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  box-shadow: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin: 4px 10px;
+}
+.code-button:hover {
+  background: #eef6ff;
+  border-color: #8ec5ff;
+}
+.code-text {
+  color: #111;
+  font-family: monospace;
+  font-size: 14px;
+}
 .title-button {
   background: transparent;
   border: none;
@@ -104,6 +124,22 @@ window {
 .line-text {
   color: #111;
   font-size: 15px;
+}
+.inline-code {
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin: 0 2px;
+}
+.inline-code:hover {
+  background: #eef6ff;
+  border-color: #8ec5ff;
+}
+.inline-code-text {
+  color: #111;
+  font-family: monospace;
+  font-size: 14px;
 }
 .copy-all {
   margin: 6px 2px 6px 6px;
@@ -410,7 +446,15 @@ class QuickMemo(Gtk.Application):
             result.append(memo)
         return result
 
-    def highlighted_label(self, text, css_class):
+    def line_markup(self, text):
+        escaped = GLib.markup_escape_text(text)
+        escaped = re.sub(r'`([^`]+)`', r'<span background="#f6f8fa" font_family="monospace">\1</span>', escaped)
+        escaped = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', escaped)
+        escaped = re.sub(r'__([^_]+)__', r'<b>\1</b>', escaped)
+        escaped = re.sub(r'^\s*[-*+]\s+(.+)$', r'• \1', escaped)
+        return escaped
+
+    def highlighted_label(self, text, css_class, markdown=False):
         label = Gtk.Label(xalign=0)
         label.add_css_class(css_class)
         label.set_hexpand(True)
@@ -425,9 +469,84 @@ class QuickMemo(Gtk.Application):
                 last = match.end()
             parts.append(GLib.markup_escape_text(text[last:]))
             label.set_markup(''.join(parts))
+        elif markdown:
+            label.set_markup(self.line_markup(text))
         else:
             label.set_text(text)
         return label
+
+    def body_parts(self, body):
+        parts = []
+        code_lines = []
+        in_code = False
+        for line in body.splitlines():
+            if line.strip().startswith('```'):
+                if in_code:
+                    parts.append(('code', '\n'.join(code_lines)))
+                    code_lines = []
+                    in_code = False
+                else:
+                    if code_lines:
+                        parts.extend(('line', code_line) for code_line in code_lines)
+                        code_lines = []
+                    in_code = True
+                continue
+            if in_code:
+                code_lines.append(line)
+            else:
+                parts.append(('line', line))
+        if in_code:
+            parts.extend(('line', line) for line in ['```', *code_lines])
+        return parts
+
+    def create_line_button(self, text):
+        button = Gtk.Button()
+        button.add_css_class('line-button')
+        button.set_hexpand(True)
+        button.set_halign(Gtk.Align.FILL)
+        label = self.highlighted_label(text, 'line-text', markdown=True)
+        label.set_wrap(True)
+        label.set_wrap_mode(Pango.WrapMode.CHAR)
+        label.set_selectable(False)
+        button.set_child(label)
+        button.connect('clicked', self.copy_text, text)
+        inline_ranges = [(match.start(), match.end(), match.group(1)) for match in re.finditer(r'`([^`]+)`', text)]
+        if inline_ranges:
+            click = Gtk.GestureClick()
+            click.connect('pressed', self.copy_inline_code, label, inline_ranges)
+            button.add_controller(click)
+
+            motion = Gtk.EventControllerMotion()
+            motion.connect('motion', self.update_inline_code_hover, button, label, inline_ranges)
+            motion.connect('leave', self.clear_inline_code_hover, button)
+            button.add_controller(motion)
+        return button
+
+    def inline_code_at(self, label, inline_ranges, x, y):
+        layout = label.get_layout()
+        offset_x, offset_y = label.get_layout_offsets()
+        index, _trailing = layout.xy_to_index(int((x - offset_x) * Pango.SCALE), int((y - offset_y) * Pango.SCALE))
+        for start, end, text in inline_ranges:
+            if start <= index < end:
+                return text
+        return None
+
+    def copy_inline_code(self, gesture, _n_press, x, y, label, inline_ranges):
+        text = self.inline_code_at(label, inline_ranges, x, y)
+        if text is None:
+            gesture.set_state(Gtk.EventSequenceState.DENIED)
+            return
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self.copy_to_clipboard(text)
+
+    def update_inline_code_hover(self, _motion, x, y, button, label, inline_ranges):
+        if self.inline_code_at(label, inline_ranges, x, y) is None:
+            button.remove_css_class('inline-code-hover')
+        else:
+            button.add_css_class('inline-code-hover')
+
+    def clear_inline_code_hover(self, _motion, button):
+        button.remove_css_class('inline-code-hover')
 
     def render_cards(self):
         while child := self.card_box.get_first_child():
@@ -452,20 +571,23 @@ class QuickMemo(Gtk.Application):
             title_button.connect('clicked', self.copy_text, memo.title)
             lines.append(title_button)
 
-            for line in memo.body.splitlines():
-                if line == '':
+            for kind, text in self.body_parts(memo.body):
+                if text == '':
                     continue
-                button = Gtk.Button()
-                button.add_css_class('line-button')
-                button.set_hexpand(True)
-                button.set_halign(Gtk.Align.FILL)
-                label = self.highlighted_label(line, 'line-text')
-                label.set_wrap(True)
-                label.set_wrap_mode(Pango.WrapMode.CHAR)
-                label.set_selectable(False)
-                button.set_child(label)
-                button.connect('clicked', self.copy_text, line)
-                lines.append(button)
+                if kind == 'code':
+                    button = Gtk.Button()
+                    button.add_css_class('code-button')
+                    label = self.highlighted_label(text, 'code-text')
+                    label.set_wrap(True)
+                    label.set_wrap_mode(Pango.WrapMode.CHAR)
+                    label.set_selectable(False)
+                    button.set_child(label)
+                    button.set_hexpand(True)
+                    button.set_halign(Gtk.Align.FILL)
+                    button.connect('clicked', self.copy_text, text)
+                    lines.append(button)
+                    continue
+                lines.append(self.create_line_button(text))
 
             actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
             actions.set_valign(Gtk.Align.START)
