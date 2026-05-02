@@ -224,6 +224,11 @@ dpkg-buildpackage -us -uc -b
 ../quickmemo_0.1.0-1_all.deb
 ```
 
+
+## 插图
+
+![screenshot](./data/screenshot.png)
+
 ## GitHub 发布建议
 
 首次推送：
