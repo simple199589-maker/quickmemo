@@ -154,6 +154,35 @@ window {
   border-radius: 13px;
   font-size: 13px;
 }
+.edit-card {
+  margin: 6px 2px 6px 2px;
+  padding: 0;
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 13px;
+  font-size: 13px;
+}
+.edit-title {
+  margin: 4px 10px 2px 10px;
+}
+.edit-body {
+  margin: 4px 10px;
+  min-height: 150px;
+}
+.save-card {
+  margin: 6px 2px 6px 2px;
+  padding: 0 8px;
+  min-height: 26px;
+  border-radius: 13px;
+  font-size: 13px;
+}
+.cancel-card {
+  margin: 6px 6px 6px 2px;
+  padding: 0 8px;
+  min-height: 26px;
+  border-radius: 13px;
+  font-size: 13px;
+}
 .toast {
   background: rgba(50, 50, 50, 0.92);
   color: white;
@@ -520,6 +549,127 @@ class QuickMemo(Gtk.Application):
         button.connect('clicked', self.copy_text, self.line_text(text).strip())
         return button
 
+    def card_body_text(self, body):
+        return body.strip('\n')
+
+    def create_edit_title(self, memo):
+        entry = Gtk.Entry()
+        entry.add_css_class('edit-title')
+        entry.set_text(memo.title)
+        return entry
+
+    def create_edit_body(self, memo):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add_css_class('edit-body')
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_hexpand(True)
+        scrolled.set_vexpand(True)
+
+        view = Gtk.TextView()
+        view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        view.get_buffer().set_text(self.card_body_text(memo.body))
+        scrolled.set_child(view)
+        return scrolled, view
+
+    def text_view_text(self, text_view):
+        buffer = text_view.get_buffer()
+        start, end = buffer.get_bounds()
+        return buffer.get_text(start, end, False)
+
+    def render_card_view(self, lines, memo):
+        title_button = Gtk.Button()
+        title_button.add_css_class('title-button')
+        title_button.set_hexpand(True)
+        title_button.set_halign(Gtk.Align.FILL)
+        title_label = self.highlighted_label(memo.title, 'title-text')
+        title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        title_button.set_child(title_label)
+        title_button.connect('clicked', self.copy_text, memo.title)
+        lines.append(title_button)
+
+        for kind, text in self.body_parts(memo.body):
+            if text == '':
+                continue
+            if kind == 'code':
+                button = Gtk.Button()
+                button.add_css_class('code-button')
+                label = self.highlighted_label(text, 'code-text')
+                label.set_wrap(True)
+                label.set_wrap_mode(Pango.WrapMode.CHAR)
+                label.set_selectable(False)
+                button.set_child(label)
+                button.set_hexpand(True)
+                button.set_halign(Gtk.Align.FILL)
+                button.connect('clicked', self.copy_text, text)
+                lines.append(button)
+                continue
+            lines.append(self.create_line_button(text))
+
+    def render_card_edit(self, lines, memo):
+        title_entry = self.create_edit_title(memo)
+        body_scrolled, body_view = self.create_edit_body(memo)
+        lines.append(title_entry)
+        lines.append(body_scrolled)
+        return title_entry, body_view
+
+    def render_card_actions(self, actions, memo, lines, editing=False, title_entry=None, body_view=None):
+        if editing:
+            save_button = Gtk.Button(label='保存')
+            save_button.set_tooltip_text('保存这一块')
+            save_button.add_css_class('save-card')
+            save_button.connect('clicked', self.save_memo_edit, memo, title_entry, body_view)
+            actions.append(save_button)
+
+            cancel_button = Gtk.Button(label='取消')
+            cancel_button.set_tooltip_text('取消编辑')
+            cancel_button.add_css_class('cancel-card')
+            cancel_button.connect('clicked', self.cancel_memo_edit, memo, lines, actions)
+            actions.append(cancel_button)
+            return
+
+        edit_button = Gtk.Button(label='✎')
+        edit_button.set_tooltip_text('编辑这一块')
+        edit_button.add_css_class('edit-card')
+        edit_button.connect('clicked', self.start_memo_edit, memo, lines, actions)
+        actions.append(edit_button)
+
+        copy_all = Gtk.Button(label='⧉')
+        copy_all.set_tooltip_text('复制整条')
+        copy_all.add_css_class('copy-all')
+        copy_all.connect('clicked', self.copy_text, memo.body)
+        actions.append(copy_all)
+
+        delete_button = Gtk.Button(label='×')
+        delete_button.set_tooltip_text('删除整条')
+        delete_button.add_css_class('delete-card')
+        delete_button.connect('clicked', self.confirm_delete_memo, memo)
+        actions.append(delete_button)
+
+    def clear_box(self, box):
+        while child := box.get_first_child():
+            box.remove(child)
+
+    def start_memo_edit(self, _button, memo, lines, actions):
+        self.clear_box(lines)
+        self.clear_box(actions)
+        title_entry, body_view = self.render_card_edit(lines, memo)
+        self.render_card_actions(actions, memo, lines, editing=True, title_entry=title_entry, body_view=body_view)
+        title_entry.grab_focus()
+
+    def cancel_memo_edit(self, _button, memo, lines, actions):
+        self.clear_box(lines)
+        self.clear_box(actions)
+        self.render_card_view(lines, memo)
+        self.render_card_actions(actions, memo, lines)
+
+    def save_memo_edit(self, _button, memo, title_entry, body_view):
+        title = title_entry.get_text().strip() or '未命名'
+        body = self.text_view_text(body_view).strip('\n')
+        if not body.strip():
+            self.show_toast('内容不能为空')
+            return
+        self.update_memo(memo, title, body)
+
     def render_cards(self):
         while child := self.card_box.get_first_child():
             self.card_box.remove(child)
@@ -532,50 +682,12 @@ class QuickMemo(Gtk.Application):
             lines = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             lines.set_hexpand(True)
             card.append(lines)
-
-            title_button = Gtk.Button()
-            title_button.add_css_class('title-button')
-            title_button.set_hexpand(True)
-            title_button.set_halign(Gtk.Align.FILL)
-            title_label = self.highlighted_label(memo.title, 'title-text')
-            title_label.set_ellipsize(Pango.EllipsizeMode.END)
-            title_button.set_child(title_label)
-            title_button.connect('clicked', self.copy_text, memo.title)
-            lines.append(title_button)
-
-            for kind, text in self.body_parts(memo.body):
-                if text == '':
-                    continue
-                if kind == 'code':
-                    button = Gtk.Button()
-                    button.add_css_class('code-button')
-                    label = self.highlighted_label(text, 'code-text')
-                    label.set_wrap(True)
-                    label.set_wrap_mode(Pango.WrapMode.CHAR)
-                    label.set_selectable(False)
-                    button.set_child(label)
-                    button.set_hexpand(True)
-                    button.set_halign(Gtk.Align.FILL)
-                    button.connect('clicked', self.copy_text, text)
-                    lines.append(button)
-                    continue
-                lines.append(self.create_line_button(text))
+            self.render_card_view(lines, memo)
 
             actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
             actions.set_valign(Gtk.Align.START)
             card.append(actions)
-
-            copy_all = Gtk.Button(label='⧉')
-            copy_all.set_tooltip_text('复制整条')
-            copy_all.add_css_class('copy-all')
-            copy_all.connect('clicked', self.copy_text, memo.body)
-            actions.append(copy_all)
-
-            delete_button = Gtk.Button(label='×')
-            delete_button.set_tooltip_text('删除整条')
-            delete_button.add_css_class('delete-card')
-            delete_button.connect('clicked', self.confirm_delete_memo, memo)
-            actions.append(delete_button)
+            self.render_card_actions(actions, memo, lines)
 
             if self.selected_card is None:
                 card.add_css_class('card-selected')
@@ -645,6 +757,16 @@ class QuickMemo(Gtk.Application):
         self.render_categories()
         self.render_cards()
         self.show_toast('已删除')
+
+    def update_memo(self, memo, title, body):
+        lines = MEMO_FILE.read_text(encoding='utf-8').splitlines()
+        replacement = [f'## {title}', *body.splitlines()]
+        lines[memo.start:memo.end] = replacement
+        MEMO_FILE.write_text('\n'.join(lines).rstrip() + '\n', encoding='utf-8')
+        self.memos = parse_memos(MEMO_FILE)
+        self.render_categories()
+        self.render_cards()
+        self.show_toast('已保存')
 
     def copy_to_clipboard(self, text):
         display = Gdk.Display.get_default()
