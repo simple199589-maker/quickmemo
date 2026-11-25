@@ -1,5 +1,14 @@
-build/
+node_modules/
+.npm-cache/
+.toolchain/
 dist/
-*.deb
-__pycache__/
-*.pyc
+build/
+src-tauri/target/
+src-tauri/gen/
+.trae-html-share-packages/
+.screenshots/
+# 更新签名私钥，禁止提交
+~/
+.keys/
+*.key
+*.key.pub

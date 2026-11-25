@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quick Memo",
+  "mainBinaryName": "quickmemo",
+  "version": "0.3.0",
+  "identifier": "io.github.quickmemo",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "备忘快贴",
+        "width": 920,
+        "height": 620,
+        "minWidth": 760,
+        "minHeight": 520,
+        "center": true,
+        "visible": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0RTk1REM2MkVCMzc3MkMKUldRc2Q3TXV4bDNwNUxueGFzd2szeWwzc0MvamRockM4N1RQYy9jcHU0VHIvRnByVGxTWmlrTzgK",
+      "endpoints": [
+        "https://github.com/simple199589-maker/quickmemo/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

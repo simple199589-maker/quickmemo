@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>备忘快贴</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">Q</div>
+        <div class="brand-copy">
+          <strong>备忘快贴</strong>
+          <span>本地加密备忘</span>
+        </div>
+      </div>
+      <div class="tree-head">
+        <span>分组 / 标签</span>
+        <button id="add-group" class="icon-btn small" type="button" title="新建分组">+</button>
+      </div>
+      <nav id="sidebar" class="tree" aria-label="分组和标签"></nav>
+      <div class="sidebar-foot">
+        <span class="secure-dot"></span>
+        <span>软件加密</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5"></circle>
+            <path d="m16 16 4.2 4.2"></path>
+          </svg>
+          <input id="search" type="search" placeholder="搜索标题、标签或内容，回车复制" autocomplete="off">
+        </div>
+        <button id="refresh" class="icon-btn" type="button" title="重新读取备忘文件">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-2.3 6.3"></path>
+            <path d="M20 5v6h-6"></path>
+          </svg>
+        </button>
+        <button id="settings-open" class="icon-btn" type="button" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"></path>
+          </svg>
+        </button>
+      </header>
+
+      <div class="content-head">
+        <div class="heading">
+          <div id="breadcrumb" class="breadcrumb"></div>
+          <div class="title-line">
+            <h2 id="view-title"></h2>
+            <button id="rename-current" class="icon-btn tiny" type="button" title="重命名" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m4 20 4.5-1 10-10-3.5-3.5-10 10L4 20Z"></path>
+                <path d="m13.5 6.5 3.5 3.5"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="view-actions" class="view-actions"></div>
+      </div>
+
+      <section id="cards" class="cards"></section>
+    </main>
+  </div>
+
+  <div id="settings-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="settings-drawer" class="drawer" aria-label="设置" hidden>
+    <header class="drawer-head">
+      <div>
+        <span class="eyebrow">Preferences</span>
+        <h2>设置</h2>
+      </div>
+      <button id="settings-close" class="icon-btn" type="button" title="关闭">×</button>
+    </header>
+    <div class="drawer-body">
+      <section class="settings-section">
+        <h3>常规</h3>
+        <label class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">开机启动</span>
+            <span class="setting-desc">登录系统后自动运行</span>
+          </span>
+          <input id="autostart" class="switch" type="checkbox">
+        </label>
+        <label class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">启动后隐藏</span>
+            <span class="setting-desc">开机启动时直接进入托盘</span>
+          </span>
+          <input id="start-hidden" class="switch" type="checkbox">
+        </label>
+        <div class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">呼出 / 隐藏</span>
+            <span class="setting-desc">全局快捷键，隐藏到托盘后也能呼出</span>
+          </span>
+          <div class="shortcut-box">
+            <button id="shortcut-record" class="keycap" type="button">Alt+B</button>
+            <button id="shortcut-clear" class="link-btn" type="button">清除</button>
+          </div>
+        </div>
+        <p id="shortcut-hint" class="inline-hint" hidden></p>
+      </section>
+
+      <section class="settings-section">
+        <h3>安全</h3>
+        <label class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">应用锁</span>
+            <span class="setting-desc">Google Authenticator 动态验证码</span>
+          </span>
+          <input id="totp-enabled" class="switch" type="checkbox">
+        </label>
+        <label id="ttl-wrap" class="setting-row" hidden>
+          <span class="setting-copy">
+            <span class="setting-label">重验周期</span>
+            <span class="setting-desc">超过这么久未启动需要重新验证</span>
+          </span>
+          <select id="ttl-days" class="select">
+            <option value="1">1 天</option>
+            <option value="3">3 天</option>
+            <option value="7">7 天</option>
+            <option value="30">30 天</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">数据密码</span>
+            <span class="setting-desc">新设备第一次打开需要校验</span>
+          </span>
+          <input id="data-password" class="switch" type="checkbox">
+        </label>
+        <button id="lock-now" class="secondary-btn wide" type="button" hidden>立即锁定</button>
+      </section>
+
+      <section class="settings-section">
+        <h3>数据</h3>
+        <button id="data-dir" class="secondary-btn wide" type="button">打开数据目录</button>
+        <p id="data-dir-path" class="path"></p>
+        <p class="hint">文件始终加密保存；基础模式只允许本软件打开，数据密码用于跨设备校验。</p>
+      </section>
+
+      <section class="settings-section">
+        <h3>更新</h3>
+        <div class="setting-row">
+          <span class="setting-copy">
+            <span class="setting-label">当前版本</span>
+            <span class="setting-desc" id="app-version">-</span>
+          </span>
+          <button id="check-update" class="secondary-btn" type="button">检查更新</button>
+        </div>
+        <p id="update-status" class="hint" hidden></p>
+        <p class="hint">从 GitHub Releases 获取安装包，安装完成后自动重启。</p>
+      </section>
+
+      <section class="settings-section about">
+        <h3>关于</h3>
+        <p>Quick Memo</p>
+        <p class="hint">本地加密备忘 · 分组 / 标签 / 内容卡片</p>
+      </section>
+    </div>
+  </aside>
+
+  <div id="lock" class="lock" hidden>
+    <form id="lock-form" class="lock-card">
+      <div class="lock-mark">Q</div>
+      <h1>解锁备忘</h1>
+      <p id="lock-hint"></p>
+      <label id="totp-field" class="lock-field" hidden>
+        <span>验证器验证码</span>
+        <input id="lock-totp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 位验证码">
+      </label>
+      <label id="password-field" class="lock-field" hidden>
+        <span>数据密码</span>
+        <input id="lock-password" type="password" placeholder="数据密码" autocomplete="current-password">
+      </label>
+      <button type="submit" class="primary-btn">解锁</button>
+      <p id="lock-error" class="error"></p>
+    </form>
+  </div>
+
+  <div id="totp-modal" class="modal-backdrop" hidden>
+    <div class="modal totp-card">
+      <h2>绑定验证器</h2>
+      <p>用 Google Authenticator、Microsoft Authenticator 等扫描二维码，也可以手动输入密钥。</p>
+      <img id="totp-qr" class="totp-qr" alt="验证器二维码">
+      <div class="totp-secret-row">
+        <code id="totp-secret"></code>
+        <button id="copy-totp-secret" class="ghost-btn" type="button">复制</button>
+      </div>
+      <p class="hint">密钥只显示一次，请妥善保存。应用锁只负责进入软件，不参与文件加密。</p>
+      <input id="totp-code-input" class="modal-input" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="输入 6 位验证码">
+      <p id="totp-error" class="error"></p>
+      <div class="modal-actions">
+        <button id="totp-cancel" class="ghost-btn" type="button">取消</button>
+        <button id="totp-confirm" class="primary-btn" type="button">完成绑定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal" class="modal-backdrop" hidden>
+    <div class="modal">
+      <h2 id="modal-title"></h2>
+      <p id="modal-text"></p>
+      <input id="modal-input" class="modal-input" type="text" hidden>
+      <input id="modal-input2" class="modal-input" type="text" hidden>
+      <select id="modal-select" class="modal-input" hidden></select>
+      <p id="modal-error" class="error"></p>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost-btn" type="button">取消</button>
+        <button id="modal-ok" class="primary-btn" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="entry-modal" class="modal-backdrop" hidden>
+    <div class="modal entry-modal">
+      <h2 id="entry-modal-title">新增内容</h2>
+      <label class="field">
+        <span>标题</span>
+        <input id="entry-title" class="modal-input" type="text" placeholder="给这条内容起个名字">
+      </label>
+      <label class="field">
+        <span>内容 <em>每行一条，点击行即可复制</em></span>
+        <textarea id="entry-body" class="modal-input entry-body" placeholder="第一行内容&#10;第二行内容"></textarea>
+      </label>
+      <p id="entry-error" class="error"></p>
+      <div class="modal-actions">
+        <button id="entry-cancel" class="ghost-btn" type="button">取消</button>
+        <button id="entry-save" class="primary-btn" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="popover" class="popover" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

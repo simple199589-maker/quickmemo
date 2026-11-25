@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            bundles: msi,nsis
+          - platform: ubuntu-22.04
+            bundles: deb,appimage
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match tauri.conf.json version ${version}"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libdbus-1-dev \
+            patchelf
+
+      - run: npm ci
+
+      - name: Check updater signing key
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::缺少 TAURI_SIGNING_PRIVATE_KEY，无法生成自动更新包。请先在仓库 Secrets 中配置更新私钥。"
+            exit 1
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Quick Memo ${{ github.ref_name }}'
+          releaseBody: |
+            Windows：优先下载 `*-setup.exe`（按用户安装，无需管理员），企业部署可用 `.msi`。
+            Linux：下载 `.deb` 或 `.AppImage`。
+
+            升级时直接安装新版本即可，数据保存在用户目录，不会被覆盖。
+          releaseDraft: true
+          prerelease: false
+          args: --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json

@@ -4,63 +4,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Quick Memo is a small Linux desktop memo/snippet picker for Debian/Ubuntu GNOME Wayland. The application is a single Python 3 executable using GTK 4 through PyGObject. It stores user memo content as Markdown, with `#` headings as sidebar categories and `##` headings as individual memo cards.
+Quick Memo is a small memo/snippet picker built with Rust + Tauri 2. The Rust backend and Tauri configuration live in [src-tauri/](src-tauri/); the frontend is vanilla HTML/CSS/JS in [ui/](ui/) and is embedded into the executable at build time. It runs on Windows and Linux and stores an encrypted JSON database of groups → tags → content cards.
 
 ## Commands
 
-- Run from source: `./src/quickmemo`
-- Make the app executable if needed: `chmod +x src/quickmemo`
-- Python syntax check: `python3 -m py_compile src/quickmemo`
-- Validate desktop file: `desktop-file-validate quickmemo.desktop`
-- Build the repository's Debian package: `./scripts/build-deb.sh`
-- Build with Debian packaging tools: `dpkg-buildpackage -us -uc -b`
-- Install local package: `sudo apt install ./dist/quickmemo_0.1.0-1_all.deb`
+- Install JS dependencies: `npm install`
+- Run in development: `npm run dev`
+- Build installers: `npm run build`
+- Build a single executable without bundles: `npm run build -- --no-bundle`
+- Rust tests: `cargo test --manifest-path src-tauri/Cargo.toml`
+- Validate Rust only: `cargo check --manifest-path src-tauri/Cargo.toml`
 
-There is no test suite in this repository. Use `python3 -m py_compile src/quickmemo`, `desktop-file-validate quickmemo.desktop`, and manual GTK app testing for verification.
+On Windows, [scripts/tauri.mjs](scripts/tauri.mjs) loads the project-local `.toolchain` Rust installation and the Visual Studio MSVC environment before invoking the Tauri CLI.
 
-## Runtime and build dependencies
-
-Runtime Debian/Ubuntu packages:
+Linux build dependencies:
 
 ```bash
-sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-pango-1.0 wl-clipboard wmctrl
-```
-
-Recommended editor dependency for the in-app Edit button:
-
-```bash
-sudo apt install gnome-text-editor
-```
-
-The app falls back to `gedit` or `xdg-open` when `gnome-text-editor` is unavailable.
-
-For `.deb` builds with the custom script:
-
-```bash
-sudo apt install dpkg-dev fakeroot desktop-file-utils
-```
-
-For Debian standard builds:
-
-```bash
-sudo apt install build-essential dpkg-dev debhelper desktop-file-utils fakeroot
+sudo apt install build-essential curl wget file libssl-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev \
+  wl-clipboard xclip
 ```
 
 ## Architecture
 
-- [src/quickmemo](src/quickmemo) contains the whole GTK application: configuration I/O, Markdown parsing, UI construction, search/filtering, clipboard operations, deletion, autostart management, and app activation behavior.
-- `Memo` is the core data model. `parse_memos()` reads the Markdown file and records source line ranges so deleting a card can remove the corresponding Markdown block.
-- `QuickMemo` subclasses `Gtk.Application`. `build_window()` constructs the complete UI in code, registers CSS from the `CSS` bytestring, loads memo data, renders categories/cards, and wires keyboard shortcuts.
-- User data lives outside the repository at `~/.local/share/quickmemo/memos.md`; app config lives at `~/.config/quickmemo/config.json`; autostart is managed by writing/removing `~/.config/autostart/quickmemo.desktop`.
-- Clipboard copying uses GTK's clipboard API, and on Wayland also tries `wl-copy` when available. Window raising uses `wmctrl` after presenting the window.
-- [data/memos.md](data/memos.md) is packaged as an example memo file, not the live development data file.
-- [quickmemo.desktop](quickmemo.desktop) and [quickmemo.svg](quickmemo.svg) are installed into standard desktop application/icon locations by both packaging paths.
-- [scripts/build-deb.sh](scripts/build-deb.sh) creates a package tree under `build/`, writes the Debian control file inline, and outputs `dist/quickmemo_0.1.0-1_all.deb`.
-- [debian/](debian/) supports standard Debian packaging. Keep dependency/version changes in sync between [scripts/build-deb.sh](scripts/build-deb.sh), [debian/control](debian/control), and [debian/changelog](debian/changelog).
+- [ui/index.html](ui/index.html), [ui/styles.css](ui/styles.css), and [ui/app.js](ui/app.js) contain the whole Tauri UI. It uses `window.__TAURI__.core.invoke` (`withGlobalTauri` is enabled) and has no bundler.
+- The UI is a three-pane hierarchy: sidebar tree (全部 → 分组 → 标签), content cards, and a right-side settings drawer. The drawer holds autostart, shortcut recording, TOTP, data password, lock, updater, and data-directory actions. Production builds disable the WebView context menu and intercept Ctrl+S/Ctrl+P/Ctrl+U.
+- The default window is 920×620; keep the layout usable down to 760×520.
+- [src-tauri/src/main.rs](src-tauri/src/main.rs) registers Tauri commands, manages the tray icon, registers the configurable global shortcut (default `Alt+B`), exposes the updater `check_update` / `install_update` commands, and keeps a `Mutex<Session>` in managed state.
+- [src-tauri/src/storage.rs](src-tauri/src/storage.rs) owns the encrypted JSON database (`Database { groups: [Group { tags: [Tag { entries: [Entry { title, lines }] }] }] }`), CRUD commands, config persistence, encryption mode state, unlock policy, and legacy Markdown migration (`#` → tag, `##` → entry title, all tags into `默认分组`).
+- [src-tauri/src/crypto.rs](src-tauri/src/crypto.rs) implements the `QMEMO4` encrypted file format: AES-256-GCM data encryption, an embedded app secret plus per-file salt for basic mode (portable across devices running this app), and Argon2id password + per-file salt for password mode. It can parse/migrate legacy `QMEMO3` files.
+- [src-tauri/src/keystore.rs](src-tauri/src/keystore.rs) stores the password-mode key cache and TOTP secret in app-owned local files outside the data directory. It does not use OS credential managers or system-level encryption.
+- [src-tauri/src/totp.rs](src-tauri/src/totp.rs) generates TOTP secrets/QR codes and verifies 6-digit codes for the optional app lock.
+- [src-tauri/src/platform.rs](src-tauri/src/platform.rs) handles platform data/config directories, autostart registration, opening folders, and clipboard fallbacks.
+- Windows stores data in `%APPDATA%\quickmemo`; Linux uses `~/.local/share/quickmemo`. `QUICKMEMO_DIR` overrides the location. Tauri config lives in the data directory as `config.json`.
+- [scripts/tauri.mjs](scripts/tauri.mjs) wraps the Tauri CLI so Windows builds can load a project-local Rust toolchain and MSVC environment.
+- Plaintext `memos.md` is migrated to `memos.enc` and deleted on first run. Deleting/updating memos re-encrypts the whole file.
+- Basic mode (no data password) is portable: any install of this app can open `memos.enc`; the embedded app secret is extractable, so this is light obfuscation, not strong secrecy.
+- Password mode is not portable without the password: a new device has no cache and must verify the data password on first open. The cache is per data directory and outside the data directory.
+- The app lock is TOTP-based and independent of file encryption. After `totp_ttl_days` (default 7) without launching, or after a manual lock, the UI asks for a TOTP code. If the data password is enabled and TOTP is disabled, the data password is re-requested instead.
+- Password-mode keys are cached per data directory so normal launches do not prompt. A data password is requested when that cache is missing (new device) or the configured inactivity period has elapsed while it is the active lock.
 
 ## Development notes
 
-- UI styling is embedded in the `CSS` constant in [src/quickmemo](src/quickmemo); there are no separate UI template or stylesheet files.
-- The parser only treats top-level `# ` headings as categories and `## ` headings as cards; body text under each card is copied line-by-line in the UI.
+- The app uses an encrypted JSON database, not Markdown. Keep the JSON schema versioned and preserve unknown data where practical.
+- The parser migrates legacy Markdown on first read; do not reintroduce line-range editing.
 - `--hidden` is used for hidden autostart behavior. Manual launches should show the window.
-- If changing package metadata, update both the custom build script and the Debian packaging files because they are independent paths.
+- Do not introduce OS keychain/keyring dependencies for basic encryption; the user explicitly wants app-level encryption, not system-level encryption.
+- Basic mode is intentionally portable across devices but only readable by this app. Do not change it back to a device-bound random key.
+- Global shortcuts are registered by `tauri-plugin-global-shortcut`. The settings recorder temporarily suspends the old shortcut, then restores/registers the new one. Invalid or conflicting shortcuts must surface an error and keep the old binding.
+- The tray icon is created in `setup_tray`; the window close button hides to the tray when the tray exists, while `Esc`/the global shortcut/the tray toggle hide it. Exit only through the tray menu.
+- Auto-update uses `tauri-plugin-updater` against GitHub Releases. `tauri.conf.json` holds `plugins.updater.pubkey` and the `releases/latest/download/latest.json` endpoint; replace the `REPLACE_WITH_...` and `OWNER/REPO` placeholders before releasing. `src-tauri/tauri.release.conf.json` enables updater artifacts only in CI; the private key lives in the `TAURI_SIGNING_PRIVATE_KEY` secret and must never be committed. Only installer-based builds auto-update; the first updater-enabled release must be installed manually.
+- Releases are built by [.github/workflows/release.yml](.github/workflows/release.yml) on `v*` tags. Keep `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` versions in sync with the tag.

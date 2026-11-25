@@ -1,266 +1,174 @@
 # Quick Memo / 备忘快贴
 
-Quick Memo 是一个轻量的 Linux 桌面备忘片段工具，用 Markdown 管理内容，适合保存命令、代码片段、常用文本和小段备忘。
+Quick Memo 是一个轻量的备忘片段工具，用「分组 → 标签 → 内容卡片」管理命令、代码片段、常用文本和小段备忘。数据保存在加密文件里，不依赖明文 Markdown。
 
-它的交互目标是替代 uTools「备忘快贴」里最常用的片段检索和复制能力，同时更适合 GNOME Wayland 环境。
+交互目标是替代 uTools「备忘快贴」里最常用的片段检索和复制能力。
 
-## 功能
+## Windows / Linux
 
-- Markdown 文件存储，方便备份、Git 管理和手动编辑。
-- 左侧按一级标题分类。
-- 每个二级标题是一张卡片。
-- 搜索时过滤卡片，并高亮命中的标题或正文。
-- 单击标题：复制标题。
-- 单击正文行：只复制这一行。
-- 右侧复制按钮：复制整张卡片正文。
-- 右侧删除按钮：二次确认后删除整张卡片。
-- `Esc` 隐藏窗口。
-- 支持程序内开关：开机启动、开机启动后隐藏。
-- 支持 GNOME 自定义快捷键呼出/隐藏。
+源码在 [ui/](ui/) 和 [src-tauri/](src-tauri/)，前端是原生 HTML/CSS/JS，不需要前端构建工具。
 
-## 截图
+### 开发环境
 
-暂无。可以运行程序后自行截图放到仓库里。
-
-## 运行环境
-
-目标环境：Debian / Ubuntu / GNOME 桌面。
-
-已在以下环境开发验证：
-
-- Debian 13 trixie
-- GNOME 48
-- Wayland
-- Python 3
-- GTK 4
-
-### 运行依赖
-
-Debian/Ubuntu 包：
+- Node.js 18 及以上（只用于 Tauri CLI）
+- Rust stable
+- Windows：WebView2 运行时（Windows 10/11 通常自带）、Visual Studio Build Tools（C++ 生成工具）
+- Debian：
 
 ```bash
-sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-pango-1.0 wl-clipboard wmctrl
+sudo apt install build-essential curl wget file libssl-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev
 ```
 
-推荐安装文本编辑器，用于点击「编辑」按钮打开备忘文件：
+### 运行与构建
 
 ```bash
-sudo apt install gnome-text-editor
+npm install
+npm run dev      # 开发模式
+npm run build    # 构建安装包
 ```
 
-如果没有 `gnome-text-editor`，程序会尝试使用 `gedit` 或 `xdg-open`。
+Windows 上 `npm run dev` 会自动加载项目内 `.toolchain` 的 Rust 工具链和 Visual Studio 编译环境（如果存在）。
 
-### 构建 deb 依赖
+构建产物在 `src-tauri/target/release/bundle/`。
 
-如果要从源码构建 `.deb`：
+### 发布与更新
+
+仓库带有 [.github/workflows/release.yml](.github/workflows/release.yml)，推送版本标签后由 GitHub Actions 自动打包并创建草稿 Release：
+
+1. 同步修改三处版本号：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`。
+2. 提交后打标签并推送：`git tag v0.3.1 && git push origin v0.3.1`。
+3. Actions 会构建 Windows（`setup.exe` / `.msi`）和 Linux（`.deb` / `.AppImage`），上传到草稿 Release。
+4. 检查产物无误后，在 GitHub 上发布该 Release。
+
+已安装的用户直接下载新安装包覆盖安装即可，数据保存在 `%APPDATA%\quickmemo` 或 `~/.local/share/quickmemo`，升级不会清除；免安装版替换 `quickmemo.exe` 即可。生产机器不需要拉取仓库或本地编译。
+
+#### 应用内自动更新
+
+应用启动后会静默检查 GitHub Release，发现新版本时弹窗确认，下载安装后自动重启。首次配置：
+
+1. 生成更新签名密钥（私钥不要提交到仓库）：
+
+   ```bash
+   npm run tauri -- signer generate -w ~/.tauri/quickmemo.key
+   ```
+
+2. 把输出的公钥填入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
+3. 把 `plugins.updater.endpoints` 里的 `OWNER/REPO` 替换为实际仓库，例如 `alice/quickmemo`。
+4. 在仓库 Secrets 中添加 `TAURI_SIGNING_PRIVATE_KEY`，内容为 `quickmemo.key` 文件的完整文本；生成时如果设置了密码，再添加 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+
+注意：
+
+- 只有通过安装包安装的版本才能自动更新，免安装版需要手动替换 `quickmemo.exe`。
+- 第一个包含自动更新的版本仍需手动安装一次，之后发布的版本才能应用内升级。
+- 私钥丢失后，已安装用户无法验证后续更新，只能手动重新安装。
+- CI 通过 `src-tauri/tauri.release.conf.json` 生成更新签名和 `latest.json`，本地普通构建不受影响。
+
+### Debian 运行说明
+
+可以直接在 Debian 13 / Ubuntu 24.04 及以上构建运行（WebKitGTK 4.1）。Windows 的 exe 不能直接在 Linux 运行，需要在 Debian 上构建：
 
 ```bash
-sudo apt install build-essential dpkg-dev debhelper desktop-file-utils fakeroot
+sudo apt install build-essential curl wget file libssl-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev \
+  wl-clipboard xclip gnome-shell-extension-appindicator
+npm install
+npm run build -- --no-bundle
+./src-tauri/target/release/quickmemo
 ```
 
-如果只是使用仓库自带的 `scripts/build-deb.sh` 打包脚本，至少需要：
+- Debian 12 默认使用 WebKitGTK 4.0；需要 backports，或按 Tauri 的 WebKitGTK 4.0 构建方式调整。
+- 复制文本优先使用 WebView 剪贴板，失败时回退 `wl-copy` / `xclip`。
+- **开机启动**：在设置里开启后写入 `~/.config/autostart/quickmemo.desktop`，`Exec` 指向当前运行的可执行文件。请用 release 二进制开启，不要用 `npm run dev`，否则自启会指向 `target/debug`；移动二进制后需要重新开关一次。
+- **托盘**：GNOME 需要 AppIndicator 扩展。安装 `gnome-shell-extension-appindicator` 并在“扩展”里启用；KDE / XFCE 通常原生支持。托盘创建失败不会阻止程序启动。
+- **快捷键**：X11 下程序内 `Alt+B` 可用；Wayland 下全局快捷键可能不可靠，设置里会显示提示。可在 GNOME「设置 → 键盘 → 自定义快捷键」中绑定：
+  - 名称：备忘快贴
+  - 命令：`/绝对路径/quickmemo --toggle`
+  - 快捷键：`Alt+B`
 
-```bash
-sudo apt install dpkg-dev fakeroot desktop-file-utils
-```
+  `--toggle` 会切换已运行实例的显示/隐藏；程序未运行时启动并显示。
 
-## 安装
+### 数据位置
 
-### 方式一：安装 deb 包
+- Windows：`%APPDATA%\quickmemo\memos.enc`
+- Linux：`~/.local/share/quickmemo/memos.enc`
+- 设置 `QUICKMEMO_DIR` 环境变量可以改用指定目录，例如网盘或同步目录。
 
-```bash
-sudo apt install ./quickmemo_0.1.0-1_all.deb
-```
+配置保存在同一目录下的 `config.json`。基础模式的密钥内置在软件中，不需要额外密钥文件；数据密码模式的解密密钥缓存和应用锁密钥保存在数据目录之外的本地文件（`%LOCALAPPDATA%\quickmemo` 或 `~/.config/quickmemo`），不使用 Windows 凭据管理器、GNOME Keyring、BitLocker 等系统级加密。
 
-安装后可以从应用菜单启动「备忘快贴」，也可以在终端运行：
+### 文件加密
 
-```bash
-quickmemo
-```
+Quick Memo 始终使用软件自己的加密，不会在磁盘上保留明文：
 
-### 方式二：源码直接运行
+- 文件使用 AES-256-GCM 加密，格式为 `memos.enc`。
+- 基础模式：软件内置密钥 + 每个文件自己的随机盐派生密钥。把 `memos.enc` 拷到另一台设备，只要用本软件就能直接打开。
+- 设置数据密码后：密钥由数据密码 + 文件随机盐派生（Argon2id）。换设备第一次打开必须校验数据密码。
+- 首次启动会把旧的 `memos.md` 自动迁移为 `memos.enc` 并删除明文。
+- 应用内编辑、删除、复制都直接操作加密文件。
+- 基础模式是“软件级轻加密”：能防止其他工具直接查看，但不能抵御逆向软件提取内置密钥；需要更强保护请设置数据密码。
 
-```bash
-chmod +x src/quickmemo
-./src/quickmemo
-```
+### 数据结构
 
-## 使用方法
-
-### 数据文件位置
-
-用户数据默认保存在：
+加密文件里的明文是版本化 JSON，不再直接保存 Markdown：
 
 ```text
-~/.local/share/quickmemo/memos.md
+全部
+└── 分组（默认分组、工作、生活……）
+    └── 标签（Git、部署、快捷键……）
+        └── 内容卡片（标题 + 多行正文）
 ```
 
-配置文件默认保存在：
+- 左侧树按「全部 → 分组 → 标签」浏览。
+- 分组和标签都可以新建、重命名、删除；标签可以移动到其他分组。
+- 标签下是内容卡片，支持新增、编辑、删除、点行复制、复制整条。
+- 旧版 Markdown 会自动迁移：`#` 大标题变成标签，`##` 小标题变成内容卡片标题，所有标签放进「默认分组」。
 
-```text
-~/.config/quickmemo/config.json
-```
+### 数据密码（可选）
 
-开机启动文件默认保存在：
+设置里的「数据密码」可以在软件加密之外再加一层密码：
 
-```text
-~/.config/autostart/quickmemo.desktop
-```
+- 至少 6 位；密钥用 Argon2id + 随机盐从密码派生。
+- 新设备第一次打开会要求输入数据密码；输入正确后在该设备缓存，平时自动打开。
+- 在原设备设置密码后不会立刻重复询问；在设置里点「立即锁定」可以马上验证。
+- 如果未启用应用锁，超过设定天数未启动程序也会要求输入数据密码。
+- 数据密码忘记后无法恢复。
+- 6 位数字只能防止随手查看，不能抵御离线暴力破解；如果文件会公开，建议使用更长的密码。
 
-### Markdown 格式
+### 应用锁（TOTP）
 
-一级标题是左侧分类：
+设置里的「应用锁」使用 Google Authenticator、Microsoft Authenticator 等动态验证码：
 
-```md
-# Git
-```
+- 开启时显示二维码和密钥，扫码绑定后输入一次 6 位验证码确认。
+- 应用锁只负责进入软件，和文件加密相互独立。
+- 正常启动不需要验证码；超过设定天数（默认 7 天，可改为 1/3/7/30 天）未使用才要求输入验证码。
+- 手动点设置里的「立即锁定」会立即要求重新验证。
+- TOTP 密钥保存在软件自己的本地密钥文件中；密钥丢失可以重新绑定，但不会影响文件解密。
 
-二级标题是一张卡片标题：
+### 设置、快捷键与托盘
 
-```md
-## 查看远程分支
-```
+顶部搜索框右侧的齿轮打开设置抽屉：
 
-二级标题下面的内容是卡片正文：
+- 常规：开机启动、启动后隐藏、呼出/隐藏快捷键。
+- 安全：应用锁、重验周期、数据密码、立即锁定。
+- 数据：打开数据目录、查看加密说明。
 
-```md
-# Git
+全局快捷键：
 
-## 查看远程分支
-git branch -r
+- 默认 `Alt+B`，在任意应用里都可以呼出或隐藏窗口。
+- 在设置里点快捷键按钮后按下新的组合键即可修改，支持字母、数字和 F1-F24，建议带 Ctrl/Alt/Shift。
+- 如果快捷键注册失败，设置里会显示原因；Linux Wayland 建议改用系统自定义快捷键执行 `quickmemo --toggle`。
+- 托盘图标提供「显示/隐藏」和「退出」；隐藏窗口后程序继续在托盘运行。GNOME 需要启用 AppIndicator 扩展才能看到托盘图标。
+- 点窗口关闭按钮（`X`）和 `Esc` 一样只隐藏到托盘，不会退出程序；要真正退出请用托盘菜单里的「退出」。
+- Linux Wayland 对全局快捷键支持有限；如果设置里提示注册失败，可以改用桌面环境自带的快捷键绑定启动命令。
 
-## 清理远程已删除分支
-git remote prune origin
-```
+### 其他特性
 
-显示效果：
-
-- 左侧分类：`Git`
-- 卡片标题：`查看远程分支`、`清理远程已删除分支`
-- 点击 `git branch -r` 只复制这一行。
-- 点击卡片右侧复制按钮复制整张卡片正文。
-
-### 搜索
-
-在顶部搜索框输入关键词：
-
-- 会过滤出命中的卡片。
-- 标题和正文里的命中文字会高亮。
-- 回车会复制第一条搜索结果里的第一行正文。
-
-### 复制
-
-- 单击标题：复制标题。
-- 单击正文任意一行：复制该行。
-- 单击右侧 `⧉`：复制整张卡片正文。
-
-Wayland 下程序会优先使用 GTK 剪贴板，同时如果安装了 `wl-clipboard`，会调用 `wl-copy` 提高复制稳定性。
-
-### 删除
-
-单击右侧 `×` 删除整张卡片。删除前会二次确认。
-
-删除会直接修改 `~/.local/share/quickmemo/memos.md`，建议把这个文件纳入自己的备份或 Git 仓库。
-
-### 编辑
-
-点击右上角「编辑」按钮，会打开 `memos.md`。
-
-编辑保存后，重新打开程序即可读取最新内容。
-
-### 开机启动
-
-程序界面里有两个开关：
-
-- 开机启动：写入或删除 `~/.config/autostart/quickmemo.desktop`。
-- 启动后隐藏：仅影响开机自启。手动点击桌面图标或运行 `quickmemo` 时仍会显示窗口。
-
-### 快捷键
-
-程序内快捷键：
-
-- `Esc`：隐藏窗口。
-- `Alt + Space`：窗口有焦点时切换显示/隐藏。
-
-GNOME Wayland 不允许普通 GTK 程序注册真正的全局快捷键。如果要在任意应用里按快捷键呼出，需要在 GNOME 里添加系统快捷键：
-
-```text
-设置 → 键盘 → 查看和自定义快捷键 → 自定义快捷键
-```
-
-添加：
-
-```text
-名称：备忘快贴
-命令：quickmemo
-快捷键：Alt + Space
-```
-
-如果 `Alt + Space` 被系统占用，可以先禁用 GNOME 原有窗口菜单快捷键，或者改用 `Ctrl + Alt + V`。
-
-## 构建 deb
-
-推荐使用仓库自带脚本，它不依赖 debhelper：
-
-```bash
-./scripts/build-deb.sh
-```
-
-构建完成后，deb 文件会生成在：
-
-```text
-dist/quickmemo_0.1.0-1_all.deb
-```
-
-也可以使用 Debian 标准构建流程：
-
-```bash
-dpkg-buildpackage -us -uc -b
-```
-
-标准构建需要安装 `debhelper`。构建完成后，deb 文件会生成在父目录，例如：
-
-```text
-../quickmemo_0.1.0-1_all.deb
-```
-
-
-## 插图
-
-![screenshot](./data/screenshot.png)
-
-## GitHub 发布建议
-
-首次推送：
-
-```bash
-git init
-git add .
-git commit -m "Initial quickmemo release"
-git branch -M main
-git remote add origin <your-repo-url>
-git push -u origin main
-```
-
-发布 deb：
-
-1. 在 GitHub 创建 Release。
-2. 上传 `quickmemo_0.1.0-1_all.deb`。
-3. 在 Release Notes 里写明依赖和安装命令。
-
-## 卸载
-
-如果通过 deb 安装：
-
-```bash
-sudo apt remove quickmemo
-```
-
-用户数据不会自动删除。如需删除数据：
-
-```bash
-rm -rf ~/.local/share/quickmemo ~/.config/quickmemo ~/.config/autostart/quickmemo.desktop
-```
+- 文件始终加密，内容为 JSON。
+- 使用应用内编辑，不提供外部编辑器打开明文文件。
+- 窗口默认 920×620，支持分组 / 标签 / 内容卡片管理。
+- 生产版本禁用右键菜单，并拦截 Ctrl+S / Ctrl+P / Ctrl+U，避免随手导出页面。
+- 全局快捷键在程序内注册，不需要系统快捷键绑定到启动命令。
+- 首次启动会把旧 `memos.md` 或旧 Markdown 数据自动迁移到新的加密 JSON 结构。
 
 ## 许可证
 
