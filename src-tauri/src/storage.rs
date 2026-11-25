@@ -72,6 +72,8 @@ pub struct Tag {
     pub name: String,
     #[serde(default)]
     pub entries: Vec<Entry>,
+    #[serde(default)]
+    pub starred: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -510,7 +512,17 @@ impl Session {
             id,
             name,
             entries: Vec::new(),
+            starred: false,
         });
+        self.write_database(&db)
+    }
+
+    pub fn set_tag_star(&mut self, id: &str, starred: bool) -> Result<(), String> {
+        self.ensure_unlocked()?;
+        let mut db = self.read_database()?;
+        let (group_index, tag_index) =
+            find_tag(&db, id).ok_or_else(|| "标签不存在".to_string())?;
+        db.groups[group_index].tags[tag_index].starred = starred;
         self.write_database(&db)
     }
 
@@ -916,6 +928,7 @@ fn migrate_markdown(text: &str) -> Result<Database, String> {
             id: new_id("t"),
             name: legacy.name,
             entries: legacy.entries,
+            starred: false,
         })
         .collect();
 
@@ -960,6 +973,7 @@ fn default_database() -> Database {
                     title: "点击单行复制这一行".to_string(),
                     lines: vec!["点击单行复制这一行".to_string()],
                 }],
+                starred: false,
             }],
         }],
     }

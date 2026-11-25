@@ -190,6 +190,45 @@ pub fn open_path(path: &Path, is_dir: bool) -> Result<(), String> {
 }
 
 #[allow(unreachable_code)]
+pub fn open_url(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("只支持打开 http/https 链接".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        return Command::new("rundll32")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("无法打开链接：{err}"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("无法打开链接：{err}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("无法打开链接：{err}"));
+    }
+
+    Err("当前平台不支持打开链接".to_string())
+}
+
+#[allow(unreachable_code)]
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     #[cfg(windows)]
     {

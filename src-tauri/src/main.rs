@@ -351,6 +351,18 @@ fn move_tag(
 }
 
 #[tauri::command]
+fn set_tag_star(
+    id: String,
+    starred: bool,
+    state: State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    with_session(&state, |session| {
+        session.set_tag_star(&id, starred)?;
+        session.snapshot()
+    })
+}
+
+#[tauri::command]
 fn delete_tag(id: String, state: State<'_, AppState>) -> Result<Snapshot, String> {
     with_session(&state, |session| {
         session.delete_tag(&id)?;
@@ -485,6 +497,11 @@ fn copy_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    platform::open_url(&url)
+}
+
+#[tauri::command]
 fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|err| err.to_string())
 }
@@ -546,6 +563,7 @@ fn main() {
             create_tag,
             rename_tag,
             move_tag,
+            set_tag_star,
             delete_tag,
             create_entry,
             update_entry,
@@ -557,6 +575,7 @@ fn main() {
             resume_shortcut,
             open_data_dir,
             copy_text,
+            open_url,
             hide_window,
             frontend_ready
         ])

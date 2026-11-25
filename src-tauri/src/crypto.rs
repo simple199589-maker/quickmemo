@@ -69,13 +69,49 @@ pub fn derive_password_key(
     Ok(key)
 }
 
+/// 本机密钥缓存：内置密钥 + 设备标识 + 缓存文件随机盐派生，仅用于避免明文落盘。
+/// 这不是强保护，能读到当前用户数据并复用本程序逻辑的攻击者仍可解密。
+pub fn derive_cache_key(salt: &[u8; SALT_LEN], device: &[u8]) -> Result<[u8; KEY_LEN], String> {
+    let mut material = Vec::with_capacity(APP_SECRET.len() + device.len());
+    material.extend_from_slice(&APP_SECRET);
+    material.extend_from_slice(device);
+    let hkdf = Hkdf::<Sha256>::new(Some(salt.as_slice()), &material);
+    let mut key = [0u8; KEY_LEN];
+    hkdf.expand(b"quickmemo-cache-v1", &mut key)
+        .map_err(|_| "生成缓存密钥失败".to_string())?;
+    Ok(key)
+}
+
+/// 加密任意字节块，返回 nonce || ciphertext。
+pub fn encrypt_blob(plaintext: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, String> {
+    let nonce = random_bytes::<NONCE_LEN>();
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "初始化加密器失败".to_string())?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .map_err(|_| "加密失败".to_string())?;
+    let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(&nonce);
+    output.extend_from_slice(&ciphertext);
+    Ok(output)
+}
+
+pub fn decrypt_blob(data: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, String> {
+    if data.len() < NONCE_LEN + 16 {
+        return Err("缓存数据已损坏".to_string());
+    }
+    let (nonce, ciphertext) = data.split_at(NONCE_LEN);
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "初始化解密器失败".to_string())?;
+    cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|_| "缓存数据无法解密".to_string())
+}
+
 pub fn encrypt_file(
     plaintext: &str,
     key: &[u8; KEY_LEN],
     mode: FileMode,
     salt: &[u8; SALT_LEN],
-) -> Result<Vec<u8>, String> {
-    let file_nonce = random_bytes::<NONCE_LEN>();
+) -> Result<Vec<u8>, String> {    let file_nonce = random_bytes::<NONCE_LEN>();
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "初始化加密器失败".to_string())?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&file_nonce), plaintext.as_bytes())
@@ -263,6 +299,16 @@ mod tests {
         assert_eq!(decrypt_file(&parsed, &key).unwrap(), "secret memo");
         let wrong = derive_password_key("654321", &salt).unwrap();
         assert!(decrypt_file(&parsed, &wrong).is_err());
+    }
+
+    #[test]
+    fn cache_blob_roundtrip_and_wrong_key() {
+        let salt = new_salt();
+        let key = derive_cache_key(&salt, b"device-a").unwrap();
+        let data = encrypt_blob(b"secret cache", &key).unwrap();
+        assert_eq!(decrypt_blob(&data, &key).unwrap(), b"secret cache");
+        let other = derive_cache_key(&salt, b"device-b").unwrap();
+        assert!(decrypt_blob(&data, &other).is_err());
     }
 
     #[test]

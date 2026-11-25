@@ -1,5 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 
+const REPO_URL = 'https://github.com/simple199589-maker/quickmemo';
+
 const $ = (id) => document.getElementById(id);
 
 const elements = {
@@ -7,12 +9,11 @@ const elements = {
   search: $('search'),
   refresh: $('refresh'),
   settingsOpen: $('settings-open'),
+  quickAdd: $('quick-add'),
   breadcrumb: $('breadcrumb'),
-  viewTitle: $('view-title'),
-  renameCurrent: $('rename-current'),
-  viewActions: $('view-actions'),
   cards: $('cards'),
   addGroup: $('add-group'),
+  githubLink: $('github-link'),
   settingsBackdrop: $('settings-backdrop'),
   settingsDrawer: $('settings-drawer'),
   settingsClose: $('settings-close'),
@@ -97,6 +98,7 @@ const state = {
 
 let toastTimer = null;
 let modalResolve = null;
+let modalCountdownTimer = null;
 let pendingTotpSecret = '';
 
 function h(tag, className, text) {
@@ -399,6 +401,18 @@ function renderSidebar() {
       }
       tagButton.addEventListener('click', () => selectTag(group.id, tag.id));
 
+      const tagStar = h(
+        'button',
+        `tree-star${tag.starred ? ' starred' : ''}`,
+        tag.starred ? '★' : '☆'
+      );
+      tagStar.type = 'button';
+      tagStar.title = tag.starred ? '取消标星' : '标星';
+      tagStar.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleTagStar(tag);
+      });
+
       const tagMore = h('button', 'tree-more', '…');
       tagMore.type = 'button';
       tagMore.title = '标签操作';
@@ -407,7 +421,7 @@ function renderSidebar() {
         openTagMenu(tagMore.getBoundingClientRect(), group, tag);
       });
 
-      tagLine.append(tagButton, tagMore);
+      tagLine.append(tagButton, tagStar, tagMore);
       elements.sidebar.append(tagLine);
     }
   }
@@ -452,24 +466,13 @@ function actionButton(label, onClick) {
   return button;
 }
 
-function moreActionButton(onClick) {
-  const button = h('button', 'icon-btn small', '…');
-  button.type = 'button';
-  button.title = '更多操作';
-  button.addEventListener('click', () => onClick(button.getBoundingClientRect()));
-  return button;
-}
-
 function renderContentHead() {
-  elements.viewActions.replaceChildren();
-  elements.renameCurrent.hidden = true;
-  elements.viewTitle.replaceChildren();
   elements.breadcrumb.replaceChildren();
 
   if (state.selection.type === 'all') {
     renderBreadcrumb([{ label: '全部', onClick: selectAll }]);
-    appendHighlighted(elements.viewTitle, '全部备忘');
-    elements.viewActions.append(actionButton('+ 新建分组', createGroup));
+    elements.quickAdd.title = '新建分组';
+    elements.quickAdd.setAttribute('aria-label', '新建分组');
     return;
   }
 
@@ -480,13 +483,8 @@ function renderContentHead() {
       { label: '全部', onClick: selectAll },
       { label: group.name, onClick: () => selectGroup(group.id) },
     ]);
-    appendHighlighted(elements.viewTitle, group.name);
-    elements.renameCurrent.hidden = false;
-    elements.renameCurrent.onclick = () => renameGroup(group);
-    elements.viewActions.append(
-      actionButton('+ 新建标签', () => createTag(group.id)),
-      moreActionButton((rect) => openGroupMenu(rect, group))
-    );
+    elements.quickAdd.title = '新建标签';
+    elements.quickAdd.setAttribute('aria-label', '新建标签');
     return;
   }
 
@@ -498,13 +496,8 @@ function renderContentHead() {
     { label: group.name, onClick: () => selectGroup(group.id) },
     { label: tag.name, onClick: () => selectTag(group.id, tag.id) },
   ]);
-  appendHighlighted(elements.viewTitle, tag.name);
-  elements.renameCurrent.hidden = false;
-  elements.renameCurrent.onclick = () => renameTag(group, tag);
-  elements.viewActions.append(
-    actionButton('+ 新增内容', () => openEntryModal({ tagId: tag.id })),
-    moreActionButton((rect) => openTagMenu(rect, group, tag))
-  );
+  elements.quickAdd.title = '新增内容';
+  elements.quickAdd.setAttribute('aria-label', '新增内容');
 }
 
 function entryMatches(entry, query) {
@@ -580,7 +573,13 @@ function tagSection(group, tag) {
   link.append(h('span', 'tag-hash', '#'));
   const name = h('span', 'tag-name');
   appendHighlighted(name, tag.name);
-  link.append(name, h('span', 'tag-count', String(tag.entries.length)));
+  link.append(name);
+  if (tag.starred) {
+    const star = h('span', 'tag-star', '★');
+    star.title = '已标星';
+    link.append(star);
+  }
+  link.append(h('span', 'tag-count', String(tag.entries.length)));
   link.addEventListener('click', () => selectTag(group.id, tag.id));
 
   const add = h('button', 'mini-add', '+');
@@ -676,87 +675,270 @@ function renderContent() {
       )
     );
   }
+
+  decorateCards();
 }
 
-function bodyParts(body) {
-  const parts = [];
-  let codeLines = [];
-  let inCode = false;
+function decorateCards() {
+  for (const card of elements.cards.querySelectorAll('.entry-card')) {
+    const lines = card.querySelector('.entry-lines');
+    if (!lines) {
+      card.classList.add('short');
+      continue;
+    }
+    if (lines.scrollHeight <= lines.clientHeight + 1) card.classList.add('short');
+  }
 
-  for (const line of body.split(/\r?\n/)) {
-    if (line.trim().startsWith('```')) {
-      if (inCode) {
-        parts.push({ kind: 'code', text: codeLines.join('\n') });
-        codeLines = [];
-        inCode = false;
+  if (!state.query.trim()) return;
+
+  // 搜索时展开所有命中的卡片，并把第一处命中滚动到可视范围内。
+  const marks = elements.cards.querySelectorAll('mark');
+  const matchedCards = new Set();
+  for (const mark of marks) {
+    const card = mark.closest('.entry-card');
+    if (card) matchedCards.add(card);
+  }
+  for (const card of matchedCards) card.classList.add('expanded');
+
+  if (marks.length) {
+    requestAnimationFrame(() => {
+      if (marks[0].isConnected) {
+        marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+      }
+    });
+  }
+}
+
+const FENCE_RE = /^\s*```/;
+
+function parseBlockLine(line) {
+  const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+  if (heading) {
+    return {
+      kind: 'heading',
+      level: heading[1].length,
+      text: heading[2].replace(/\s*#+\s*$/, ''),
+    };
+  }
+  if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) return { kind: 'hr' };
+  const quote = line.match(/^\s*>\s?(.*)$/);
+  if (quote) return { kind: 'quote', text: quote[1] };
+  const task = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/);
+  if (task) {
+    return { kind: 'task', checked: task[1].toLowerCase() === 'x', text: task[2] };
+  }
+  const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+  if (bullet) return { kind: 'ul', text: bullet[1] };
+  const ordered = line.match(/^\s*(\d{1,3})[.)]\s+(.*)$/);
+  if (ordered) return { kind: 'ol', marker: `${ordered[1]}.`, text: ordered[2] };
+  return { kind: 'text', text: line };
+}
+
+function parseBody(lines) {
+  const blocks = [];
+  let fence = null;
+
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, '');
+    if (fence) {
+      if (FENCE_RE.test(line)) {
+        blocks.push({ kind: 'code', text: fence.join('\n') });
+        fence = null;
       } else {
-        if (codeLines.length) {
-          for (const codeLine of codeLines) parts.push({ kind: 'line', text: codeLine });
-          codeLines = [];
-        }
-        inCode = true;
+        fence.push(line);
       }
       continue;
     }
-    if (inCode) codeLines.push(line);
-    else parts.push({ kind: 'line', text: line });
+    if (FENCE_RE.test(line)) {
+      fence = [];
+      continue;
+    }
+    if (!line.trim()) continue;
+    blocks.push(parseBlockLine(line));
   }
 
-  if (inCode) {
-    parts.push({ kind: 'line', text: '```' });
-    for (const line of codeLines) parts.push({ kind: 'line', text: line });
-  }
-
-  return parts;
+  if (fence) blocks.push({ kind: 'code', text: fence.join('\n') });
+  return blocks;
 }
 
-function lineText(text) {
+function mdPlain(text) {
   return text
+    .replace(/!\[([^\]]*)\]\(([^)\s]*)\)/g, (all, alt, url) => alt || url)
+    .replace(/\[([^\]]*)\]\(([^)\s]*)\)/g, (all, label, url) => label || url)
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
-    .replace(/^\s*[-*+]\s+/, '• ');
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/(^|[^\w*])\*([^*\s][^*]*)\*/g, '$1$2')
+    .replace(/(^|[^\w])_([^_\s][^_]*)_(?![\w])/g, '$1$2')
+    .trim();
 }
 
-function renderInline(container, text, markdown) {
-  let value = text;
-  if (markdown) value = value.replace(/^\s*[-*+]\s+/, '• ');
-  if (!markdown) {
-    appendHighlighted(container, value);
+function blockPlainText(block) {
+  if (block.kind === 'code') return block.text;
+  if (block.kind === 'hr') return '';
+  return mdPlain(block.text || '');
+}
+
+function linePlainText(text) {
+  if (!text.trim() || FENCE_RE.test(text)) return '';
+  return blockPlainText(parseBlockLine(text));
+}
+
+function entryPlainText(entry) {
+  return parseBody(entry.lines || [])
+    .map(blockPlainText)
+    .filter((value) => value.trim())
+    .join('\n');
+}
+
+function isWebUrl(url) {
+  return /^https?:\/\//i.test(url);
+}
+
+function openExternal(url) {
+  invoke('open_url', { url }).catch((error) => toast(errorText(error), 2600));
+}
+
+function appendLink(container, url, label) {
+  const target = url.replace(/^<(.*)>$/, '$1');
+  if (!isWebUrl(target)) {
+    appendHighlighted(container, label);
     return;
   }
-
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__)/g;
-  let last = 0;
-  let match = pattern.exec(value);
-  while (match) {
-    if (match.index > last) appendHighlighted(container, value.slice(last, match.index));
-    const token = match[0];
-    if (token.startsWith('`')) {
-      const code = h('code', 'inline-code');
-      appendHighlighted(code, token.slice(1, -1));
-      container.append(code);
-    } else {
-      const strong = h('strong');
-      appendHighlighted(strong, token.slice(2, -2));
-      container.append(strong);
+  const link = h('span', 'md-link');
+  link.setAttribute('role', 'link');
+  link.tabIndex = 0;
+  link.title = `${target}（Ctrl + 单击打开）`;
+  renderInline(link, label, false);
+  link.addEventListener('click', (event) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openExternal(target);
+  });
+  link.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      event.stopPropagation();
+      openExternal(target);
     }
-    last = match.index + token.length;
-    match = pattern.exec(value);
-  }
-  if (last < value.length) appendHighlighted(container, value.slice(last));
+  });
+  container.append(link);
 }
 
-function renderLine(text, code) {
-  const button = h('button', code ? 'code-button' : 'line-button');
-  button.type = 'button';
-  const label = h('span', code ? 'code-text' : 'line-text');
-  renderInline(label, text, !code);
-  button.append(label);
-  button.addEventListener('click', () => {
-    copyText(code ? text : lineText(text).trim());
+function renderInline(container, text, allowLinks = true) {
+  const pattern =
+    /`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]*)\]\(([^)\s]+)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%\[\]]+)|\*([^*\s][^*]*)\*|_([^_\s][^_]*)_/g;
+  let last = 0;
+  let match = pattern.exec(text);
+
+  while (match) {
+    if (match.index > last) appendHighlighted(container, text.slice(last, match.index));
+
+    if (match[1] !== undefined) {
+      const code = h('code', 'inline-code');
+      appendHighlighted(code, match[1]);
+      container.append(code);
+    } else if (match[2] !== undefined || match[3] !== undefined) {
+      const strong = h('strong');
+      renderInline(strong, match[2] !== undefined ? match[2] : match[3], allowLinks);
+      container.append(strong);
+    } else if (match[4] !== undefined) {
+      const del = h('del');
+      renderInline(del, match[4], allowLinks);
+      container.append(del);
+    } else if (match[5] !== undefined) {
+      if (allowLinks) appendLink(container, match[6], match[5] || match[6]);
+      else appendHighlighted(container, match[5] || match[6]);
+    } else if (match[7] !== undefined) {
+      if (allowLinks) appendLink(container, match[8], match[7] || match[8]);
+      else appendHighlighted(container, match[7] || match[8]);
+    } else if (match[9] !== undefined) {
+      let url = match[9];
+      const trailing = url.match(/[.,;:!?)\]}。，；：！？]+$/);
+      let tail = '';
+      if (trailing) {
+        tail = trailing[0];
+        url = url.slice(0, -tail.length);
+      }
+      if (allowLinks && url) appendLink(container, url, url);
+      else appendHighlighted(container, url || match[9]);
+      if (tail) appendHighlighted(container, tail);
+    } else if (match[10] !== undefined) {
+      const em = h('em');
+      renderInline(em, match[10], allowLinks);
+      container.append(em);
+    } else if (match[11] !== undefined) {
+      // 避免把 snake_case 中的下划线当成斜体。
+      const before = match.index > 0 ? text[match.index - 1] : '';
+      const after = text[match.index + match[0].length] || '';
+      if ((before && /[\w]/.test(before)) || (after && /[\w]/.test(after))) {
+        appendHighlighted(container, match[0]);
+      } else {
+        const em = h('em');
+        renderInline(em, match[11], allowLinks);
+        container.append(em);
+      }
+    }
+
+    last = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+
+  if (last < text.length) appendHighlighted(container, text.slice(last));
+}
+
+function copyRow(block) {
+  const row = h(
+    'div',
+    block.kind === 'heading' ? `line-button md-heading md-h${block.level}` : 'line-button'
+  );
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+
+  if (block.kind === 'quote') row.classList.add('md-quote');
+  if (block.kind === 'ul' || block.kind === 'ol') {
+    row.classList.add('md-li');
+    row.append(h('span', 'md-bullet', block.kind === 'ul' ? '•' : block.marker));
+  } else if (block.kind === 'task') {
+    row.classList.add('md-li', 'md-task');
+    if (block.checked) row.classList.add('checked');
+    row.append(h('span', 'md-check', block.checked ? '✓' : ''));
+  }
+
+  const label = h('span', 'line-text');
+  renderInline(label, block.text);
+  row.append(label);
+
+  const copy = () => copyText(blockPlainText(block));
+  row.title = '点击复制';
+  row.addEventListener('click', copy);
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      copy();
+    }
   });
-  return button;
+  return row;
+}
+
+function codeRow(block) {
+  const row = h('div', 'code-button');
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.title = '点击复制代码';
+  const label = h('span', 'code-text');
+  appendHighlighted(label, block.text);
+  row.append(label);
+  row.addEventListener('click', () => copyText(block.text));
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      copyText(block.text);
+    }
+  });
+  return row;
 }
 
 function entryAction(label, title, danger, onClick) {
@@ -778,17 +960,20 @@ function renderEntryCard(group, tag, entry) {
   title.type = 'button';
   title.title = '复制标题';
   appendHighlighted(title, entry.title);
-  title.addEventListener('click', () => copyText(entry.title));
+  title.addEventListener('click', () => copyText(mdPlain(entry.title)));
   main.append(title);
 
-  const lines = entry.lines || [];
-  if (!lines.length) {
+  const blocks = parseBody(entry.lines || []);
+  if (!blocks.length) {
     main.append(h('span', 'entry-empty', '（无正文）'));
   } else {
-    for (const part of bodyParts(lines.join('\n'))) {
-      if (part.text === '') continue;
-      main.append(renderLine(part.text, part.kind === 'code'));
+    const lines = h('div', 'entry-lines');
+    for (const block of blocks) {
+      if (block.kind === 'hr') lines.append(h('div', 'md-hr'));
+      else if (block.kind === 'code') lines.append(codeRow(block));
+      else lines.append(copyRow(block));
     }
+    main.append(lines);
   }
 
   const actions = h('div', 'entry-actions');
@@ -797,7 +982,7 @@ function renderEntryCard(group, tag, entry) {
       openEntryModal({ tagId: tag.id, entry })
     ),
     entryAction('⧉', '复制整条', false, () =>
-      copyText(lines.length ? lines.join('\n') : entry.title)
+      copyText(entryPlainText(entry) || entry.title)
     ),
     entryAction('×', '删除这条内容', true, () => deleteEntry(entry))
   );
@@ -832,21 +1017,25 @@ function copyFirstMatch() {
     for (const tag of group.tags) {
       for (const entry of tag.entries) {
         if (!query) {
-          const line = (entry.lines || []).find((item) => item.trim());
-          if (line) {
-            copyText(lineText(line).trim());
+          const text = (entry.lines || [])
+            .map(linePlainText)
+            .find((item) => item.trim());
+          if (text) {
+            copyText(text);
             return;
           }
           continue;
         }
         for (const line of entry.lines || []) {
-          if (line.toLowerCase().includes(query)) {
-            copyText(lineText(line).trim());
+          if (!line.toLowerCase().includes(query)) continue;
+          const text = linePlainText(line);
+          if (text) {
+            copyText(text);
             return;
           }
         }
-        if (entry.title.toLowerCase().includes(query)) {
-          copyText(entry.title);
+        if (mdPlain(entry.title).toLowerCase().includes(query)) {
+          copyText(mdPlain(entry.title));
           return;
         }
       }
@@ -912,6 +1101,10 @@ function openGroupMenu(anchorRect, group) {
 
 function openTagMenu(anchorRect, group, tag) {
   openPopover(anchorRect, [
+    {
+      label: tag.starred ? '取消标星' : '标星',
+      onClick: () => toggleTagStar(tag),
+    },
     { label: '重命名标签', onClick: () => renameTag(group, tag) },
     { label: '移动到分组', onClick: () => moveTag(group, tag) },
     { label: '删除标签', onClick: () => deleteTag(group, tag), danger: true },
@@ -930,6 +1123,8 @@ function openModal({
   placeholder2 = '',
   initial = '',
   initial2 = '',
+  countdown = 0,
+  danger = false,
 }) {
   return new Promise((resolve) => {
     modalResolve = resolve;
@@ -959,15 +1154,42 @@ function openModal({
     }
 
     elements.modalError.textContent = '';
+    clearInterval(modalCountdownTimer);
+    modalCountdownTimer = null;
+    elements.modalOk.classList.toggle('danger', danger);
+    elements.modalOk.disabled = false;
     elements.modalOk.textContent = okLabel;
     elements.modal.hidden = false;
+
+    if (countdown > 0) {
+      let remaining = countdown;
+      elements.modalOk.disabled = true;
+      elements.modalOk.textContent = `${okLabel}（${remaining}s）`;
+      modalCountdownTimer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearInterval(modalCountdownTimer);
+          modalCountdownTimer = null;
+          elements.modalOk.disabled = false;
+          elements.modalOk.textContent = okLabel;
+        } else {
+          elements.modalOk.textContent = `${okLabel}（${remaining}s）`;
+        }
+      }, 1000);
+    }
 
     const focusTarget = input
       ? elements.modalInput
       : select
         ? elements.modalSelect
         : elements.modalOk;
-    setTimeout(() => focusTarget.focus(), 0);
+    setTimeout(() => {
+      if (focusTarget === elements.modalOk && elements.modalOk.disabled) {
+        elements.modalCancel.focus();
+        return;
+      }
+      focusTarget.focus();
+    }, 0);
   });
 }
 
@@ -975,6 +1197,9 @@ function closeModal(value) {
   if (!modalResolve) return;
   const resolve = modalResolve;
   modalResolve = null;
+  clearInterval(modalCountdownTimer);
+  modalCountdownTimer = null;
+  elements.modalOk.disabled = false;
   elements.modal.hidden = true;
   resolve(value);
 }
@@ -988,7 +1213,7 @@ async function askPassword(title, text, confirm) {
       confirm,
       okLabel: '确定',
       inputType: 'password',
-      placeholder: '数据密码（至少 6 位）',
+      placeholder: '数据密码（至少 6 位，建议 12 位以上）',
       placeholder2: '再次输入数据密码',
     });
     if (!result) return null;
@@ -1000,8 +1225,20 @@ async function askPassword(title, text, confirm) {
       toast('两次输入的密码不一致');
       continue;
     }
+    if (isWeakPassword(result.value)) {
+      const proceed = await confirmAction(
+        '密码强度较弱',
+        '建议使用 12 位以上的随机密码或长口令。纯数字和短密码很容易被离线暴力破解，仍要使用这个密码吗？',
+        '仍然使用'
+      );
+      if (!proceed) continue;
+    }
     return result.value;
   }
+}
+
+function isWeakPassword(password) {
+  return password.length < 10 || /^\d+$/.test(password);
 }
 
 async function promptName(title, placeholder, initial = '') {
@@ -1082,12 +1319,25 @@ async function renameTag(group, tag) {
   }
 }
 
+async function toggleTagStar(tag) {
+  const starred = !tag.starred;
+  try {
+    const snapshot = await invoke('set_tag_star', { id: tag.id, starred });
+    applySnapshot(snapshot);
+    toast(starred ? '已标星' : '已取消标星');
+  } catch (error) {
+    toast(errorText(error), 2600);
+  }
+}
+
 async function deleteGroup(group) {
-  const ok = await confirmAction(
-    `删除分组「${group.name}」？`,
-    '分组里还有标签时不能删除，请先把标签移走或删除。',
-    '删除分组'
-  );
+  const ok = await openModal({
+    title: `删除分组「${group.name}」？`,
+    text: '分组里还有标签时不能删除，请先把标签移走或删除。删除后无法恢复，确认按钮将在 5 秒倒计时结束后可用。',
+    okLabel: '确认删除',
+    countdown: 5,
+    danger: true,
+  });
   if (!ok) return;
   try {
     const snapshot = await invoke('delete_group', { id: group.id });
@@ -1100,12 +1350,23 @@ async function deleteGroup(group) {
 }
 
 async function deleteTag(group, tag) {
-  const ok = await confirmAction(
-    `删除标签「${tag.name}」？`,
-    `标签下的 ${tag.entries.length} 条内容会一起删除，无法恢复。`,
-    '删除标签'
-  );
-  if (!ok) return;
+  if (tag.starred) {
+    const ok = await openModal({
+      title: `删除标星标签「${tag.name}」？`,
+      text: `这是已标星的标签，标签下的 ${tag.entries.length} 条内容会一起删除，无法恢复。确认按钮将在 5 秒倒计时结束后可用。`,
+      okLabel: '确认删除',
+      countdown: 5,
+      danger: true,
+    });
+    if (!ok) return;
+  } else {
+    const ok = await confirmAction(
+      `删除标签「${tag.name}」？`,
+      `标签下的 ${tag.entries.length} 条内容会一起删除，无法恢复。`,
+      '删除标签'
+    );
+    if (!ok) return;
+  }
   try {
     const snapshot = await invoke('delete_tag', { id: tag.id });
     applySnapshot(snapshot);
@@ -1367,6 +1628,19 @@ function bindEvents() {
   });
 
   elements.settingsOpen.addEventListener('click', openSettings);
+  elements.quickAdd.addEventListener('click', () => {
+    if (state.selection.type === 'tag') {
+      const found = findTag(state.selection.tagId);
+      if (found) openEntryModal({ tagId: found.tag.id });
+      return;
+    }
+    if (state.selection.type === 'group') {
+      createTag(state.selection.groupId);
+      return;
+    }
+    createGroup();
+  });
+  elements.githubLink.addEventListener('click', () => openExternal(REPO_URL));
   elements.settingsClose.addEventListener('click', () => closeSettings());
   elements.settingsBackdrop.addEventListener('click', () => closeSettings());
 
@@ -1430,7 +1704,7 @@ function bindEvents() {
     if (elements.dataPassword.checked) {
       const password = await askPassword(
         '设置数据密码',
-        '至少 6 位，建议使用 6 位数字。新设备第一次打开需要输入此密码；忘记后无法恢复。6 位密码只能防止随手查看。',
+        '至少 6 位，建议使用 12 位以上的随机密码或长口令。新设备第一次打开需要输入此密码；忘记后无法恢复。6 位纯数字很容易被离线暴力破解。',
         true
       );
       if (!password) {
