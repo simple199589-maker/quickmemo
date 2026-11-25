@@ -575,6 +575,50 @@ impl Session {
         self.write_database(&db)
     }
 
+    pub fn reorder_group(&mut self, id: &str, to_index: usize) -> Result<(), String> {
+        self.ensure_unlocked()?;
+        let mut db = self.read_database()?;
+        let from = db
+            .groups
+            .iter()
+            .position(|group| group.id == id)
+            .ok_or_else(|| "分组不存在".to_string())?;
+        let mut to = to_index.min(db.groups.len());
+        if from == to {
+            return Ok(());
+        }
+        let group = db.groups.remove(from);
+        if from < to {
+            to -= 1;
+        }
+        db.groups.insert(to, group);
+        self.write_database(&db)
+    }
+
+    pub fn reorder_tag(
+        &mut self,
+        group_id: &str,
+        id: &str,
+        to_index: usize,
+    ) -> Result<(), String> {
+        self.ensure_unlocked()?;
+        let mut db = self.read_database()?;
+        let (group_index, from) = find_tag(&db, id).ok_or_else(|| "标签不存在".to_string())?;
+        if db.groups[group_index].id != group_id {
+            return Err("只能在同一分组内调整标签顺序".to_string());
+        }
+        let mut to = to_index.min(db.groups[group_index].tags.len());
+        if from == to {
+            return Ok(());
+        }
+        let tag = db.groups[group_index].tags.remove(from);
+        if from < to {
+            to -= 1;
+        }
+        db.groups[group_index].tags.insert(to, tag);
+        self.write_database(&db)
+    }
+
     pub fn delete_tag(&mut self, id: &str) -> Result<(), String> {
         self.ensure_unlocked()?;
         let mut db = self.read_database()?;

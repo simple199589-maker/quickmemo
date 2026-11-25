@@ -6,6 +6,8 @@ const $ = (id) => document.getElementById(id);
 
 const elements = {
   sidebar: $('sidebar'),
+  searchBox: $('search-box'),
+  searchScope: $('search-scope'),
   search: $('search'),
   refresh: $('refresh'),
   settingsOpen: $('settings-open'),
@@ -97,6 +99,8 @@ const state = {
   settingsHideTimer: null,
   recordingShortcut: false,
   entryEditing: null,
+  groupOpen: {},
+  groupOpenInitialized: false,
 };
 
 let toastTimer = null;
@@ -106,6 +110,8 @@ let pendingTotpSecret = '';
 let tabDrag = null;
 let lastTabDragEnd = 0;
 let tagTabsFrame = 0;
+let searchScopeKey = '';
+let treeDrag = null;
 
 function h(tag, className, text) {
   const node = document.createElement(tag);
@@ -177,6 +183,28 @@ function normalizeSelection() {
   }
 }
 
+function syncGroupOpen() {
+  if (!state.groupOpenInitialized) {
+    state.groupOpenInitialized = true;
+    const defaultOpen = state.groups.length <= 3;
+    state.groupOpen = {};
+    state.groups.forEach((group, index) => {
+      state.groupOpen[group.id] = defaultOpen || index === 0;
+    });
+    return;
+  }
+
+  const ids = new Set(state.groups.map((group) => group.id));
+  for (const id of Object.keys(state.groupOpen)) {
+    if (!ids.has(id)) delete state.groupOpen[id];
+  }
+  for (const group of state.groups) {
+    if (!(group.id in state.groupOpen)) {
+      state.groupOpen[group.id] = state.groups.length <= 3;
+    }
+  }
+}
+
 function applySnapshot(snapshot) {
   state.groups = Array.isArray(snapshot.groups) ? snapshot.groups : [];
   state.locked = Boolean(snapshot.locked);
@@ -203,6 +231,7 @@ function applySnapshot(snapshot) {
   }
 
   normalizeSelection();
+  syncGroupOpen();
   updateSettingsControls();
   updateLock();
   renderSidebar();
@@ -349,9 +378,62 @@ function appendHighlighted(parent, text) {
   if (index < text.length) parent.append(document.createTextNode(text.slice(index)));
 }
 
+function isDropAfter(event, line) {
+  const rect = line.getBoundingClientRect();
+  return event.clientY > rect.top + rect.height / 2;
+}
+
+function clearDropMarks() {
+  elements.sidebar
+    .querySelectorAll('.drop-before, .drop-after')
+    .forEach((node) => node.classList.remove('drop-before', 'drop-after'));
+}
+
+function finishTreeDrag() {
+  clearDropMarks();
+  treeDrag = null;
+  elements.sidebar
+    .querySelectorAll('.tree-line.dragging')
+    .forEach((node) => node.classList.remove('dragging'));
+}
+
+function beginTreeDrag(event, line, type, id, groupId = null) {
+  if (
+    event.target.closest &&
+    event.target.closest('.tree-more, .tree-star, .tree-caret')
+  ) {
+    event.preventDefault();
+    return;
+  }
+  treeDrag = { type, id, groupId };
+  line.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', id);
+}
+
+function toggleGroupOpen(group, focusRow = false) {
+  state.groupOpen[group.id] = !state.groupOpen[group.id];
+  renderSidebar();
+  if (focusRow) {
+    const row = elements.sidebar.querySelector(
+      `.group-line[data-group-id="${group.id}"] .group-row`
+    );
+    if (row) row.focus();
+  }
+}
+
+function toggleAllGroups() {
+  const allExpanded = state.groups.every((group) => state.groupOpen[group.id]);
+  for (const group of state.groups) {
+    state.groupOpen[group.id] = !allExpanded;
+  }
+  renderSidebar();
+}
+
 function renderSidebar() {
   elements.sidebar.replaceChildren();
 
+  const allLine = h('div', 'tree-line all-line');
   const allRow = h('button', 'tree-row all-row');
   allRow.type = 'button';
   allRow.append(h('span', 'tree-dot all-dot'));
@@ -359,7 +441,25 @@ function renderSidebar() {
   allRow.append(h('span', 'tree-count', String(totalEntryCount())));
   if (state.selection.type === 'all') allRow.classList.add('selected');
   allRow.addEventListener('click', selectAll);
-  elements.sidebar.append(allRow);
+  allLine.append(allRow);
+
+  if (state.groups.length) {
+    const allExpanded = state.groups.every((group) => state.groupOpen[group.id]);
+    const allToggle = h('button', 'all-toggle');
+    allToggle.type = 'button';
+    allToggle.title = allExpanded ? '全部收起' : '全部展开';
+    allToggle.setAttribute('aria-label', allToggle.title);
+    allToggle.innerHTML = allExpanded
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 10 6-6 6 6"></path><path d="m6 17 6-6 6 6"></path></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 7 6 6 6-6"></path><path d="m6 14 6 6 6-6"></path></svg>';
+    allToggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleAllGroups();
+    });
+    allLine.append(allToggle);
+  }
+
+  elements.sidebar.append(allLine);
 
   if (!state.groups.length) {
     elements.sidebar.append(
@@ -369,10 +469,25 @@ function renderSidebar() {
   }
 
   for (const group of state.groups) {
+    const open = Boolean(state.groupOpen[group.id]);
     const groupLine = h('div', 'tree-line group-line');
-    const groupButton = h('button', 'tree-row group-row');
+    groupLine.dataset.groupId = group.id;
+    groupLine.draggable = true;
+
+    const groupButton = h('button', `tree-row group-row${open ? ' expanded' : ''}`);
     groupButton.type = 'button';
-    groupButton.append(h('span', 'tree-dot group-dot'));
+
+    const caret = h('span', 'tree-caret');
+    caret.title = open ? '收起分组' : '展开分组';
+    caret.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>';
+    caret.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleGroupOpen(group);
+    });
+    groupButton.append(caret);
+
     const groupName = h('span', 'tree-name');
     appendHighlighted(groupName, group.name);
     groupButton.append(groupName);
@@ -381,6 +496,18 @@ function renderSidebar() {
       groupButton.classList.add('selected');
     }
     groupButton.addEventListener('click', () => selectGroup(group.id));
+    groupButton.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const shouldOpen = event.key === 'ArrowRight';
+      if (Boolean(state.groupOpen[group.id]) === shouldOpen) return;
+      state.groupOpen[group.id] = shouldOpen;
+      renderSidebar();
+      const row = elements.sidebar.querySelector(
+        `.group-line[data-group-id="${group.id}"] .group-row`
+      );
+      if (row) row.focus();
+    });
 
     const groupMore = h('button', 'tree-more', '…');
     groupMore.type = 'button';
@@ -390,11 +517,45 @@ function renderSidebar() {
       openGroupMenu(groupMore.getBoundingClientRect(), group);
     });
 
+    groupLine.addEventListener('dragstart', (event) =>
+      beginTreeDrag(event, groupLine, 'group', group.id)
+    );
+    groupLine.addEventListener('dragend', finishTreeDrag);
+    groupLine.addEventListener('dragover', (event) => {
+      if (!treeDrag || treeDrag.type !== 'group' || treeDrag.id === group.id) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const after = isDropAfter(event, groupLine);
+      clearDropMarks();
+      groupLine.classList.add(after ? 'drop-after' : 'drop-before');
+    });
+    groupLine.addEventListener('dragleave', () => {
+      groupLine.classList.remove('drop-before', 'drop-after');
+    });
+    groupLine.addEventListener('drop', (event) => {
+      if (!treeDrag || treeDrag.type !== 'group' || treeDrag.id === group.id) return;
+      event.preventDefault();
+      const after = isDropAfter(event, groupLine);
+      const fromIndex = state.groups.findIndex((item) => item.id === treeDrag.id);
+      const targetIndex = state.groups.findIndex((item) => item.id === group.id);
+      const dragId = treeDrag.id;
+      finishTreeDrag();
+      if (fromIndex < 0 || targetIndex < 0) return;
+      const toIndex = after ? targetIndex + 1 : targetIndex;
+      if (fromIndex === toIndex || fromIndex + 1 === toIndex) return;
+      reorderGroup(dragId, toIndex);
+    });
+
     groupLine.append(groupButton, groupMore);
     elements.sidebar.append(groupLine);
 
+    if (!open) continue;
+
     for (const tag of group.tags) {
       const tagLine = h('div', 'tree-line tag-line');
+      tagLine.dataset.tagId = tag.id;
+      tagLine.draggable = true;
+
       const tagButton = h('button', 'tree-row tag-row');
       tagButton.type = 'button';
       tagButton.append(h('span', 'tree-dot tag-dot'));
@@ -427,6 +588,50 @@ function renderSidebar() {
         openTagMenu(tagMore.getBoundingClientRect(), group, tag);
       });
 
+      tagLine.addEventListener('dragstart', (event) =>
+        beginTreeDrag(event, tagLine, 'tag', tag.id, group.id)
+      );
+      tagLine.addEventListener('dragend', finishTreeDrag);
+      tagLine.addEventListener('dragover', (event) => {
+        if (
+          !treeDrag ||
+          treeDrag.type !== 'tag' ||
+          treeDrag.groupId !== group.id ||
+          treeDrag.id === tag.id
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        const after = isDropAfter(event, tagLine);
+        clearDropMarks();
+        tagLine.classList.add(after ? 'drop-after' : 'drop-before');
+      });
+      tagLine.addEventListener('dragleave', () => {
+        tagLine.classList.remove('drop-before', 'drop-after');
+      });
+      tagLine.addEventListener('drop', (event) => {
+        if (
+          !treeDrag ||
+          treeDrag.type !== 'tag' ||
+          treeDrag.groupId !== group.id ||
+          treeDrag.id === tag.id
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const after = isDropAfter(event, tagLine);
+        const tags = group.tags;
+        const fromIndex = tags.findIndex((item) => item.id === treeDrag.id);
+        const targetIndex = tags.findIndex((item) => item.id === tag.id);
+        const dragId = treeDrag.id;
+        finishTreeDrag();
+        if (fromIndex < 0 || targetIndex < 0) return;
+        const toIndex = after ? targetIndex + 1 : targetIndex;
+        if (fromIndex === toIndex || fromIndex + 1 === toIndex) return;
+        reorderTag(group.id, dragId, toIndex);
+      });
+
       tagLine.append(tagButton, tagStar, tagMore);
       elements.sidebar.append(tagLine);
     }
@@ -449,6 +654,7 @@ function selectGroup(groupId) {
 
 function selectTag(groupId, tagId) {
   state.selection = { type: 'tag', groupId, tagId };
+  state.groupOpen[groupId] = true;
   closePopover();
   renderSidebar();
   renderContent();
@@ -504,6 +710,65 @@ function renderContentHead() {
   ]);
   elements.quickAdd.title = '新增内容';
   elements.quickAdd.setAttribute('aria-label', '新增内容');
+}
+
+const SEARCH_PLACEHOLDER = '搜索标题、标签或内容，回车复制';
+
+function searchScopeInfo() {
+  if (state.selection.type === 'tag') {
+    const found = findTag(state.selection.tagId);
+    if (found) {
+      return { key: `tag:${found.tag.id}`, name: found.tag.name };
+    }
+  } else if (state.selection.type === 'group') {
+    const group = findGroup(state.selection.groupId);
+    if (group) {
+      return { key: `group:${group.id}`, name: group.name };
+    }
+  }
+  return null;
+}
+
+function updateSearchScope() {
+  const info = searchScopeInfo();
+  const focused = elements.searchBox.contains(document.activeElement);
+  const hasQuery = Boolean(elements.search.value.trim());
+  const visible = Boolean(info) && (focused || hasQuery);
+
+  if (!visible) {
+    searchScopeKey = '';
+    elements.searchScope.hidden = true;
+    elements.searchScope.replaceChildren();
+    elements.search.placeholder = SEARCH_PLACEHOLDER;
+    return;
+  }
+
+  if (info.key !== searchScopeKey) {
+    searchScopeKey = info.key;
+    const chip = h('span', 'scope-chip');
+    chip.title = `搜索范围：${info.name}`;
+    chip.append(h('span', 'scope-label', info.name));
+    const remove = h('button', 'scope-remove', '×');
+    remove.type = 'button';
+    remove.title = '清除搜索范围';
+    remove.setAttribute('aria-label', '清除搜索范围');
+    remove.addEventListener('mousedown', (event) => event.preventDefault());
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      clearSearchScope();
+    });
+    chip.append(remove);
+    elements.searchScope.replaceChildren(chip);
+  }
+  elements.searchScope.hidden = false;
+  elements.search.placeholder = `在「${info.name}」中搜索，回车复制`;
+}
+
+function clearSearchScope() {
+  if (state.selection.type === 'all') return;
+  selectAll();
+  elements.search.focus();
+  updateSearchScope();
 }
 
 function entryMatches(entry, query) {
@@ -732,6 +997,7 @@ function scheduleActiveTagTab() {
 
 function renderContent() {
   renderContentHead();
+  updateSearchScope();
   elements.cards.replaceChildren();
 
   if (state.locked) {
@@ -1567,6 +1833,24 @@ async function moveTag(group, tag) {
   }
 }
 
+async function reorderGroup(id, toIndex) {
+  try {
+    const snapshot = await invoke('reorder_group', { id, toIndex });
+    applySnapshot(snapshot);
+  } catch (error) {
+    toast(errorText(error), 2600);
+  }
+}
+
+async function reorderTag(groupId, id, toIndex) {
+  try {
+    const snapshot = await invoke('reorder_tag', { groupId, id, toIndex });
+    applySnapshot(snapshot);
+  } catch (error) {
+    toast(errorText(error), 2600);
+  }
+}
+
 function setEntryFullscreen(enabled) {
   elements.entryModal.classList.toggle('entry-fullscreen', enabled);
   elements.entryModalBox.classList.toggle('fullscreen', enabled);
@@ -1795,7 +2079,20 @@ function bindEvents() {
     if (event.key === 'Enter') {
       event.preventDefault();
       copyFirstMatch();
+      return;
     }
+    if (
+      event.key === 'Backspace' &&
+      elements.search.value === '' &&
+      !elements.searchScope.hidden
+    ) {
+      event.preventDefault();
+      clearSearchScope();
+    }
+  });
+  elements.searchBox.addEventListener('focusin', updateSearchScope);
+  elements.searchBox.addEventListener('focusout', () => {
+    setTimeout(updateSearchScope, 0);
   });
 
   elements.cards.addEventListener('scroll', scheduleActiveTagTab, { passive: true });

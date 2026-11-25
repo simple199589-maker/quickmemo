@@ -34,11 +34,12 @@
 
     <main class="main">
       <header class="topbar">
-        <div class="search-box">
+        <div id="search-box" class="search-box">
           <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="11" cy="11" r="6.5"></circle>
             <path d="m16 16 4.2 4.2"></path>
           </svg>
+          <div id="search-scope" class="search-scope" hidden></div>
           <input id="search" type="search" placeholder="搜索标题、标签或内容，回车复制" autocomplete="off">
         </div>
         <button id="refresh" class="icon-btn" type="button" title="重新读取备忘文件">

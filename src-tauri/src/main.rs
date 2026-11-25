@@ -351,6 +351,31 @@ fn move_tag(
 }
 
 #[tauri::command]
+fn reorder_group(
+    id: String,
+    to_index: usize,
+    state: State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    with_session(&state, |session| {
+        session.reorder_group(&id, to_index)?;
+        session.snapshot()
+    })
+}
+
+#[tauri::command]
+fn reorder_tag(
+    group_id: String,
+    id: String,
+    to_index: usize,
+    state: State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    with_session(&state, |session| {
+        session.reorder_tag(&group_id, &id, to_index)?;
+        session.snapshot()
+    })
+}
+
+#[tauri::command]
 fn set_tag_star(
     id: String,
     starred: bool,
@@ -563,6 +588,8 @@ fn main() {
             create_tag,
             rename_tag,
             move_tag,
+            reorder_group,
+            reorder_tag,
             set_tag_star,
             delete_tag,
             create_entry,
