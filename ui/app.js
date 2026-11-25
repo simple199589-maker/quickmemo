@@ -675,6 +675,21 @@ function ensureTagTabVisible(tab) {
   }
 }
 
+// Tab 离开页签栏时，优先聚焦当前可视区域内的卡片控件，避免列表被拉回顶部。
+function firstVisibleCardControl() {
+  const container = elements.cards.getBoundingClientRect();
+  const nodes = elements.cards.querySelectorAll(
+    '.entry-title, .line-button, .code-button'
+  );
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > container.top + 4 && rect.top < container.bottom - 4) {
+      return node;
+    }
+  }
+  return null;
+}
+
 function updateActiveTagTab() {
   tagTabsFrame = 0;
   if (elements.tagTabs.hidden) return;
@@ -1799,8 +1814,16 @@ function bindEvents() {
   elements.tagTabs.addEventListener('pointercancel', endTabDrag);
   elements.tagTabs.addEventListener('pointerleave', endTabDrag);
   elements.tagTabs.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     const tabs = Array.from(elements.tagTabs.children);
+    if (event.key === 'Tab' && !event.shiftKey) {
+      if (!tabs.length || document.activeElement !== tabs[tabs.length - 1]) return;
+      const target = firstVisibleCardControl();
+      if (!target) return;
+      event.preventDefault();
+      target.focus({ preventScroll: true });
+      return;
+    }
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     const index = tabs.indexOf(document.activeElement);
     if (index < 0) return;
     event.preventDefault();
