@@ -65,6 +65,8 @@
         <div id="breadcrumb" class="breadcrumb"></div>
       </div>
 
+      <div id="tag-tabs" class="tag-tabs" hidden></div>
+
       <section id="cards" class="cards"></section>
     </main>
   </div>
@@ -220,16 +222,32 @@
   </div>
 
   <div id="entry-modal" class="modal-backdrop" hidden>
-    <div class="modal entry-modal">
+    <div id="entry-modal-box" class="modal entry-modal">
       <h2 id="entry-modal-title">新增内容</h2>
       <label class="field">
         <span>标题</span>
         <input id="entry-title" class="modal-input" type="text" placeholder="给这条内容起个名字">
       </label>
-      <label class="field">
-        <span>内容 <em>支持 Markdown，点击行复制纯文本</em></span>
+      <div class="field field-content">
+        <div class="field-head">
+          <span>内容 <em>支持 Markdown，点击行复制纯文本</em></span>
+          <button id="entry-fullscreen" class="modal-icon-btn" type="button" title="全屏编辑" aria-label="全屏编辑">
+            <svg class="icon-expand" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 4h6v6"></path>
+              <path d="M10 20H4v-6"></path>
+              <path d="M20 4l-7 7"></path>
+              <path d="M4 20l7-7"></path>
+            </svg>
+            <svg class="icon-collapse" viewBox="0 0 24 24" aria-hidden="true" hidden>
+              <path d="M20 10h-6V4"></path>
+              <path d="M4 14h6v6"></path>
+              <path d="M14 10l7-7"></path>
+              <path d="M10 14l-7 7"></path>
+            </svg>
+          </button>
+        </div>
         <textarea id="entry-body" class="modal-input entry-body" placeholder="# 小标题&#10;- 列表项&#10;**加粗** 和 `行内代码`&#10;[链接文字](https://example.com)"></textarea>
-      </label>
+      </div>
       <p id="entry-error" class="error"></p>
       <div class="modal-actions">
         <button id="entry-cancel" class="ghost-btn" type="button">取消</button>

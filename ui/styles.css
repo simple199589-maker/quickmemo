@@ -535,6 +535,80 @@ select:focus-visible {
   color: var(--muted-2);
 }
 
+.tag-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 22px 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.tag-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tag-tabs.dragging {
+  cursor: grabbing;
+}
+
+.tag-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.tag-tab:hover {
+  background: #e9eee7;
+  color: var(--text);
+}
+
+.tag-tab.active {
+  background: var(--accent-soft);
+  border-color: rgba(47, 139, 85, 0.22);
+  color: var(--accent-strong);
+  font-weight: 620;
+}
+
+.tag-tab-hash {
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.tag-tab-star {
+  color: #d9a300;
+  font-size: 10.5px;
+}
+
+.tag-tab-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(38, 55, 43, 0.06);
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.tag-tab.active .tag-tab-count {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent-strong);
+}
+
 .action-btn {
   height: 32px;
   padding: 0 12px;
@@ -711,7 +785,7 @@ select:focus-visible {
   min-width: 0;
 }
 
-/* 默认收起，只露出一部分；悬停、聚焦或搜索命中时展开 */
+/* 默认收起，只露出一部分；聚焦、点击蒙层或搜索命中时展开 */
 .entry-lines {
   max-height: 144px;
   overflow: hidden;
@@ -719,19 +793,23 @@ select:focus-visible {
 
 .entry-card.short .entry-lines,
 .entry-card.expanded .entry-lines,
-.entry-card:hover .entry-lines,
+.entry-card.manual-expanded .entry-lines,
 .entry-card:focus-within .entry-lines {
   max-height: none;
   overflow: visible;
 }
 
-.entry-card:not(.short):not(.expanded):not(:hover):not(:focus-within)::after {
-  content: "";
+.entry-expand {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
   border-radius: 0 0 9px 9px;
   background: linear-gradient(
     to bottom,
@@ -739,7 +817,32 @@ select:focus-visible {
     rgba(255, 255, 255, 0.82) 55%,
     var(--surface) 100%
   );
-  pointer-events: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.entry-expand svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+
+.entry-card:hover .entry-expand svg,
+.entry-expand:focus-visible svg {
+  opacity: 1;
+}
+
+.entry-card.short .entry-expand,
+.entry-card.expanded .entry-expand,
+.entry-card.manual-expanded .entry-expand,
+.entry-card:focus-within .entry-expand {
+  display: none;
 }
 
 .entry-title {
@@ -1499,6 +1602,56 @@ mark {
   font-weight: 400;
 }
 
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.field-head > span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.field-head > span em {
+  color: var(--muted-2);
+  font-style: normal;
+  font-weight: 400;
+}
+
+.modal-icon-btn {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.modal-icon-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.modal-icon-btn:hover {
+  color: var(--accent-strong);
+  border-color: #cbd8cd;
+  background: #fbfdfb;
+}
+
 .entry-modal {
   width: min(520px, calc(100vw - 32px));
 }
@@ -1509,6 +1662,31 @@ mark {
   line-height: 1.6;
   font-family: var(--mono);
   font-size: 12.5px;
+}
+
+.modal-backdrop.entry-fullscreen {
+  padding: 0;
+}
+
+.entry-modal.fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  padding: 20px 24px 22px;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.entry-modal.fullscreen .field-content {
+  flex: 1;
+  min-height: 0;
+}
+
+.entry-modal.fullscreen .entry-body {
+  flex: 1;
+  min-height: 0;
+  resize: none;
 }
 
 .totp-card {
@@ -1627,6 +1805,10 @@ mark {
 
   .content-head {
     padding: 2px 15px 2px;
+  }
+
+  .tag-tabs {
+    padding: 1px 15px 5px;
   }
 
   .cards {

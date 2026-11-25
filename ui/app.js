@@ -11,6 +11,7 @@ const elements = {
   settingsOpen: $('settings-open'),
   quickAdd: $('quick-add'),
   breadcrumb: $('breadcrumb'),
+  tagTabs: $('tag-tabs'),
   cards: $('cards'),
   addGroup: $('add-group'),
   githubLink: $('github-link'),
@@ -58,7 +59,9 @@ const elements = {
   modalCancel: $('modal-cancel'),
   modalOk: $('modal-ok'),
   entryModal: $('entry-modal'),
+  entryModalBox: $('entry-modal-box'),
   entryModalTitle: $('entry-modal-title'),
+  entryFullscreen: $('entry-fullscreen'),
   entryTitle: $('entry-title'),
   entryBody: $('entry-body'),
   entryError: $('entry-error'),
@@ -100,6 +103,9 @@ let toastTimer = null;
 let modalResolve = null;
 let modalCountdownTimer = null;
 let pendingTotpSecret = '';
+let tabDrag = null;
+let lastTabDragEnd = 0;
+let tagTabsFrame = 0;
 
 function h(tag, className, text) {
   const node = document.createElement(tag);
@@ -566,6 +572,8 @@ function groupDivider(group) {
 
 function tagSection(group, tag) {
   const section = h('section', 'tag-section');
+  section.dataset.groupId = group.id;
+  section.dataset.tagId = tag.id;
   const head = h('div', 'tag-section-head');
 
   const link = h('button', 'tag-link');
@@ -611,13 +619,113 @@ function tagSection(group, tag) {
   return section;
 }
 
+function hideTagTabs() {
+  elements.tagTabs.hidden = true;
+  elements.tagTabs.replaceChildren();
+}
+
+function renderTagTabs(tree) {
+  if (state.selection.type === 'tag') {
+    hideTagTabs();
+    return;
+  }
+
+  const items = [];
+  for (const group of tree) {
+    for (const tag of group.tags) items.push({ group, tag });
+  }
+  if (items.length < 2) {
+    hideTagTabs();
+    return;
+  }
+
+  elements.tagTabs.replaceChildren();
+  for (const { group, tag } of items) {
+    const tab = h('button', 'tag-tab');
+    tab.type = 'button';
+    tab.dataset.tagId = tag.id;
+    tab.title = `${group.name} / ${tag.name}`;
+    tab.append(h('span', 'tag-tab-hash', '#'));
+    const name = h('span', 'tag-tab-name');
+    appendHighlighted(name, tag.name);
+    tab.append(name);
+    if (tag.starred) tab.append(h('span', 'tag-tab-star', '★'));
+    tab.append(h('span', 'tag-tab-count', String(tag.entries.length)));
+    tab.addEventListener('click', () => {
+      if (Date.now() - lastTabDragEnd < 250) return;
+      const section = elements.cards.querySelector(
+        `.tag-section[data-tag-id="${tag.id}"]`
+      );
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    elements.tagTabs.append(tab);
+  }
+  elements.tagTabs.hidden = false;
+  requestAnimationFrame(updateActiveTagTab);
+}
+
+function ensureTagTabVisible(tab) {
+  const bar = elements.tagTabs;
+  const barRect = bar.getBoundingClientRect();
+  const tabRect = tab.getBoundingClientRect();
+  if (tabRect.left < barRect.left) {
+    bar.scrollLeft -= barRect.left - tabRect.left + 10;
+  } else if (tabRect.right > barRect.right) {
+    bar.scrollLeft += tabRect.right - barRect.right + 10;
+  }
+}
+
+function updateActiveTagTab() {
+  tagTabsFrame = 0;
+  if (elements.tagTabs.hidden) return;
+  const sections = elements.cards.querySelectorAll('.tag-section');
+  if (!sections.length) return;
+
+  const cardsRect = elements.cards.getBoundingClientRect();
+  let activeId = '';
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top - cardsRect.top <= 16) {
+      activeId = section.dataset.tagId;
+    } else {
+      break;
+    }
+  }
+
+  const cards = elements.cards;
+  if (
+    cards.scrollHeight > cards.clientHeight + 2 &&
+    cards.scrollTop + cards.clientHeight >= cards.scrollHeight - 2
+  ) {
+    activeId = sections[sections.length - 1].dataset.tagId;
+  }
+  if (!activeId) activeId = sections[0].dataset.tagId;
+
+  const previous = elements.tagTabs.querySelector('.tag-tab.active');
+  let activeTab = null;
+  for (const tab of elements.tagTabs.children) {
+    const isActive = tab.dataset.tagId === activeId;
+    tab.classList.toggle('active', isActive);
+    if (isActive) activeTab = tab;
+  }
+  if (activeTab && previous !== activeTab) ensureTagTabVisible(activeTab);
+}
+
+function scheduleActiveTagTab() {
+  if (tagTabsFrame) return;
+  tagTabsFrame = requestAnimationFrame(updateActiveTagTab);
+}
+
 function renderContent() {
   renderContentHead();
   elements.cards.replaceChildren();
 
-  if (state.locked) return;
+  if (state.locked) {
+    hideTagTabs();
+    return;
+  }
 
   if (!state.groups.length) {
+    hideTagTabs();
     const empty = h('div', 'empty-state');
     empty.append(h('div', 'empty-title', '先建一个分组'));
     empty.append(h('p', '', '分组里可以放多个标签，标签下面是具体内容。'));
@@ -676,6 +784,7 @@ function renderContent() {
     );
   }
 
+  renderTagTabs(tree);
   decorateCards();
 }
 
@@ -987,7 +1096,23 @@ function renderEntryCard(group, tag, entry) {
     entryAction('×', '删除这条内容', true, () => deleteEntry(entry))
   );
 
-  card.append(main, actions);
+  const expand = h('button', 'entry-expand');
+  expand.type = 'button';
+  expand.tabIndex = -1;
+  expand.title = '展开全部内容';
+  expand.setAttribute('aria-label', '展开全部内容');
+  expand.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>';
+  expand.addEventListener('mousedown', (event) => event.preventDefault());
+  expand.addEventListener('click', () => {
+    card.classList.add('manual-expanded');
+    const active = document.activeElement;
+    if (active && !card.contains(active) && typeof active.blur === 'function') {
+      active.blur();
+    }
+  });
+
+  card.append(main, actions, expand);
   return card;
 }
 
@@ -1401,18 +1526,33 @@ async function moveTag(group, tag) {
   }
 }
 
+function setEntryFullscreen(enabled) {
+  elements.entryModal.classList.toggle('entry-fullscreen', enabled);
+  elements.entryModalBox.classList.toggle('fullscreen', enabled);
+  elements.entryFullscreen.title = enabled ? '退出全屏' : '全屏编辑';
+  elements.entryFullscreen.setAttribute(
+    'aria-label',
+    enabled ? '退出全屏' : '全屏编辑'
+  );
+  elements.entryFullscreen.querySelector('.icon-expand').hidden = enabled;
+  elements.entryFullscreen.querySelector('.icon-collapse').hidden = !enabled;
+  if (enabled) elements.entryBody.focus();
+}
+
 function openEntryModal({ tagId, entry = null }) {
   state.entryEditing = { tagId, entryId: entry ? entry.id : null };
   elements.entryModalTitle.textContent = entry ? '编辑内容' : '新增内容';
   elements.entryTitle.value = entry ? entry.title : '';
   elements.entryBody.value = entry ? (entry.lines || []).join('\n') : '';
   elements.entryError.textContent = '';
+  setEntryFullscreen(false);
   elements.entryModal.hidden = false;
   setTimeout(() => elements.entryTitle.focus(), 0);
 }
 
 function closeEntryModal() {
   elements.entryModal.hidden = true;
+  setEntryFullscreen(false);
   elements.entryError.textContent = '';
   state.entryEditing = null;
 }
@@ -1614,6 +1754,60 @@ function bindEvents() {
     if (event.key === 'Enter') {
       event.preventDefault();
       copyFirstMatch();
+    }
+  });
+
+  elements.cards.addEventListener('scroll', scheduleActiveTagTab, { passive: true });
+
+  elements.tagTabs.addEventListener(
+    'wheel',
+    (event) => {
+      const bar = elements.tagTabs;
+      if (bar.scrollWidth <= bar.clientWidth) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      bar.scrollLeft += event.deltaY;
+    },
+    { passive: false }
+  );
+
+  elements.tagTabs.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    tabDrag = {
+      startX: event.clientX,
+      startLeft: elements.tagTabs.scrollLeft,
+      moved: false,
+    };
+  });
+  elements.tagTabs.addEventListener('pointermove', (event) => {
+    if (!tabDrag) return;
+    const delta = event.clientX - tabDrag.startX;
+    if (!tabDrag.moved) {
+      if (Math.abs(delta) < 5) return;
+      tabDrag.moved = true;
+      elements.tagTabs.classList.add('dragging');
+    }
+    elements.tagTabs.scrollLeft = tabDrag.startLeft - delta;
+  });
+  const endTabDrag = () => {
+    if (!tabDrag) return;
+    if (tabDrag.moved) lastTabDragEnd = Date.now();
+    tabDrag = null;
+    elements.tagTabs.classList.remove('dragging');
+  };
+  elements.tagTabs.addEventListener('pointerup', endTabDrag);
+  elements.tagTabs.addEventListener('pointercancel', endTabDrag);
+  elements.tagTabs.addEventListener('pointerleave', endTabDrag);
+  elements.tagTabs.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const tabs = Array.from(elements.tagTabs.children);
+    const index = tabs.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const next = tabs[index + (event.key === 'ArrowRight' ? 1 : -1)];
+    if (next) {
+      next.focus();
+      ensureTagTabVisible(next);
     }
   });
 
@@ -1852,6 +2046,10 @@ function bindEvents() {
   });
 
   elements.entryCancel.addEventListener('click', closeEntryModal);
+  elements.entryFullscreen.addEventListener('click', () => {
+    const fullscreen = elements.entryModalBox.classList.contains('fullscreen');
+    setEntryFullscreen(!fullscreen);
+  });
   elements.entrySave.addEventListener('click', saveEntry);
   elements.entryModal.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
@@ -1862,6 +2060,15 @@ function bindEvents() {
 
   document.addEventListener('contextmenu', (event) => {
     if (!state.debug) event.preventDefault();
+  });
+
+  document.addEventListener('click', (event) => {
+    const card = event.target.closest ? event.target.closest('.entry-card') : null;
+    for (const expanded of elements.cards.querySelectorAll(
+      '.entry-card.manual-expanded'
+    )) {
+      if (expanded !== card) expanded.classList.remove('manual-expanded');
+    }
   });
 
   document.addEventListener('keydown', (event) => {
@@ -1888,6 +2095,10 @@ function bindEvents() {
         return;
       }
       if (!elements.entryModal.hidden) {
+        if (elements.entryModalBox.classList.contains('fullscreen')) {
+          setEntryFullscreen(false);
+          return;
+        }
         closeEntryModal();
         return;
       }
