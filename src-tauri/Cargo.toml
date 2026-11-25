@@ -1,6 +1,6 @@
 [package]
 name = "quickmemo"
-version = "0.3.3"
+version = "0.3.4"
 description = "Cross-platform quick memo picker"
 edition = "2021"
 

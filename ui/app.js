@@ -1127,6 +1127,25 @@ function renderEntryCard(group, tag, entry) {
     }
   });
 
+  card.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openPopover(
+      null,
+      [
+        {
+          label: '修改内容',
+          onClick: () => openEntryModal({ tagId: tag.id, entry }),
+        },
+        {
+          label: '复制整条',
+          onClick: () => copyText(entryPlainText(entry) || entry.title),
+        },
+      ],
+      { x: event.clientX, y: event.clientY }
+    );
+  });
+
   card.append(main, actions, expand);
   return card;
 }
@@ -1184,7 +1203,7 @@ function copyFirstMatch() {
   toast('没有可复制的内容');
 }
 
-function openPopover(anchorRect, items) {
+function openPopover(anchorRect, items, point = null) {
   elements.popover.replaceChildren();
   for (const item of items) {
     if (item.separator) {
@@ -1206,13 +1225,20 @@ function openPopover(anchorRect, items) {
 
   elements.popover.hidden = false;
   const rect = elements.popover.getBoundingClientRect();
-  const left = Math.max(
-    8,
-    Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8)
-  );
-  let top = anchorRect.bottom + 6;
-  if (top + rect.height > window.innerHeight - 8) {
-    top = Math.max(8, anchorRect.top - rect.height - 6);
+  let left;
+  let top;
+  if (point) {
+    left = Math.max(8, Math.min(point.x, window.innerWidth - rect.width - 8));
+    top = Math.max(8, Math.min(point.y, window.innerHeight - rect.height - 8));
+  } else {
+    left = Math.max(
+      8,
+      Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8)
+    );
+    top = anchorRect.bottom + 6;
+    if (top + rect.height > window.innerHeight - 8) {
+      top = Math.max(8, anchorRect.top - rect.height - 6);
+    }
   }
   elements.popover.style.left = `${left}px`;
   elements.popover.style.top = `${top}px`;
@@ -2082,10 +2108,12 @@ function bindEvents() {
   });
 
   document.addEventListener('contextmenu', (event) => {
-    if (!state.debug) event.preventDefault();
+    // 始终禁用系统右键菜单，避免通过“另存为 / 导出网页”泄露内容。
+    event.preventDefault();
   });
 
   document.addEventListener('click', (event) => {
+    if (event.target.closest && event.target.closest('#popover')) return;
     const card = event.target.closest ? event.target.closest('.entry-card') : null;
     for (const expanded of elements.cards.querySelectorAll(
       '.entry-card.manual-expanded'
